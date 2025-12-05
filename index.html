@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v3.3 智慧警示版)</title>
+    <title>急診檢傷分診計數器 (v3.3.1 修復版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -280,6 +280,12 @@
             }, [patients]);
 
             // --- Actions ---
+
+            // **修復：補回 updateActiveRoomCount 函式**
+            const updateActiveRoomCount = async (count) => {
+                const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
+                await updateDoc(stateRef, { activeRoomCount: count });
+            };
 
             // 1. Initial Trigger for Add Patient
             const handleAddPatientClick = () => {
