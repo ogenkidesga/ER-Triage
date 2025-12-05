@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v3.2 交班管理版)</title>
+    <title>急診檢傷分診計數器 (v3.3 智慧警示版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -28,6 +28,15 @@
         }
         .countdown-text {
             animation: pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        /* Animation for Time Up Alert */
+        @keyframes flash-warning {
+            0%, 100% { background-color: #fee2e2; border-color: #ef4444; } /* Red-100 */
+            50% { background-color: #fca5a5; border-color: #b91c1c; } /* Red-300 */
+        }
+        .animate-flash-warning {
+            animation: flash-warning 1s infinite;
         }
     </style>
 </head>
@@ -78,6 +87,9 @@
         const RefreshCw = ({ className, size }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
         );
+        const AlertTriangle = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        );
 
         // --- Firebase Config & Init (正式環境) ---
         const firebaseConfig = {
@@ -119,17 +131,19 @@
 
         const SUSPENSION_DURATION_MS = 30 * 60 * 1000;
 
-        // --- Modal Component ---
-        const Modal = ({ isOpen, onClose, title, children }) => {
+        // --- Modal Components ---
+        const Modal = ({ isOpen, onClose, title, children, showClose = true }) => {
             if (!isOpen) return null;
             return (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100">
                         <div className="flex justify-between items-center p-4 border-b bg-gray-50">
-                            <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700 p-1 rounded-full hover:bg-gray-200">
-                                <XCircle size={24} />
-                            </button>
+                            <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">{title}</h3>
+                            {showClose && (
+                                <button onClick={onClose} className="text-gray-500 hover:text-gray-700 p-1 rounded-full hover:bg-gray-200">
+                                    <XCircle size={24} />
+                                </button>
+                            )}
                         </div>
                         <div className="p-6">
                             {children}
@@ -155,6 +169,9 @@
             const [targetRoom, setTargetRoom] = useState(1);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [adminLoading, setAdminLoading] = useState(false);
+
+            // New State for Critical Patient Confirmation
+            const [criticalConfirmData, setCriticalConfirmData] = useState(null);
 
             // --- Auth & Data Fetching ---
             useEffect(() => {
@@ -205,10 +222,21 @@
             const activeRoomCount = systemState.activeRoomCount || 4;
             const activeRooms = ROOM_DEFINITIONS.slice(0, activeRoomCount);
 
-            const isRoomSuspended = (roomId) => {
+            // Updated Logic: Check for *active* suspension vs *expired* suspension
+            const getRoomSuspensionState = (roomId) => {
                 const suspendedUntil = systemState.suspensions?.[roomId];
-                if (!suspendedUntil) return false;
-                return suspendedUntil > Date.now();
+                if (!suspendedUntil) return 'NONE'; // No suspension record
+                if (suspendedUntil > Date.now()) return 'ACTIVE'; // Counting down
+                return 'EXPIRED'; // Time reached 0, but record still exists (Alert state)
+            };
+
+            const isRoomActiveSuspension = (roomId) => {
+                return getRoomSuspensionState(roomId) === 'ACTIVE';
+            };
+            
+            // Logic for pointer skipping: We only skip if ACTIVELY suspended
+            const isRoomSkippable = (roomId) => {
+                return isRoomActiveSuspension(roomId);
             };
 
             const getRotationType = (level) => {
@@ -220,7 +248,7 @@
                 let pointer = systemState.rotation?.[rotationKey] || 1;
                 if (pointer > activeRoomCount) pointer = 1;
                 let attempts = 0;
-                while (isRoomSuspended(pointer) && attempts < activeRoomCount) {
+                while (isRoomSkippable(pointer) && attempts < activeRoomCount) {
                     pointer = (pointer % activeRoomCount) + 1;
                     attempts++;
                 }
@@ -251,101 +279,29 @@
                 return initialStats;
             }, [patients]);
 
-            // --- Admin Actions (交班/重置功能) ---
-            
-            // 1. 重置輪序
-            const handleResetRotation = async (mode) => {
-                let message = "";
-                let updateData = {};
+            // --- Actions ---
 
-                if (mode === 'all') {
-                    message = "確定要將「所有輪序」重置回診一嗎？";
-                    updateData = { 
-                        'rotation.level1_next': 1, 
-                        'rotation.others_next': 1 
-                    };
-                } else if (mode === 'level1') {
-                    message = "確定要將「一級病人輪序」重置回診一嗎？";
-                    updateData = { 'rotation.level1_next': 1 };
-                } else {
-                    message = "確定要將「其他病人輪序」重置回診一嗎？";
-                    updateData = { 'rotation.others_next': 1 };
-                }
-
-                if (!window.confirm(message)) return;
-
-                setAdminLoading(true);
-                try {
-                    const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                    await updateDoc(stateRef, updateData);
-                    alert("輪序已重置！");
-                } catch (e) {
-                    alert(`重置失敗: ${e.message}`);
-                } finally {
-                    setAdminLoading(false);
-                }
-            };
-
-            // 2. 清空病人 (全部 或 指定診間)
-            const handleClearPatients = async (roomId = null) => {
-                let message = roomId 
-                    ? `警告：確定要清空「${ROOM_DEFINITIONS.find(r=>r.id===roomId).name}」的所有病人嗎？\n此動作無法復原！`
-                    : "⚠️ 危險操作：確定要清空「全部」病人資料嗎？\n此動作通常用於交班或換日，無法復原！";
-
-                if (!window.confirm(message)) return;
-
-                setAdminLoading(true);
-                try {
-                    let q;
-                    if (roomId) {
-                        q = query(collection(db, PATIENTS_COLLECTION), where("roomId", "==", roomId));
-                    } else {
-                        q = query(collection(db, PATIENTS_COLLECTION));
-                    }
-                    
-                    const snapshot = await getDocs(q);
-                    const batch = writeBatch(db);
-                    
-                    if (snapshot.empty) {
-                        alert("目前沒有資料可刪除。");
-                        return;
-                    }
-
-                    snapshot.docs.forEach((doc) => {
-                        batch.delete(doc.ref);
-                    });
-
-                    await batch.commit();
-                    
-                    if (!roomId) {
-                        // 如果是全清，通常也想要重置輪序，詢問一下
-                        if (window.confirm("資料已清空。\n是否順便將「看診輪序」歸零回診一？")) {
-                            const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                            await updateDoc(stateRef, { 
-                                'rotation.level1_next': 1, 
-                                'rotation.others_next': 1 
-                            });
-                        }
-                    }
-                } catch (e) {
-                    console.error(e);
-                    alert(`清除失敗: ${e.message}`);
-                } finally {
-                    setAdminLoading(false);
-                }
-            };
-
-
-            // --- Standard Actions ---
-            const updateActiveRoomCount = async (count) => {
-                const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                await updateDoc(stateRef, { activeRoomCount: count });
-            };
-
-            const handleAddPatient = async () => {
+            // 1. Initial Trigger for Add Patient
+            const handleAddPatientClick = () => {
                 if (!inputMrn.trim()) return;
+                
+                // 判斷是否為重症
+                if (isOhca || isMajorTrauma) {
+                    setCriticalConfirmData({
+                        targetRoomName: activeRooms.find(r => r.id === parseInt(targetRoom))?.name || `診${targetRoom}`
+                    });
+                    return; // Stop here, wait for modal
+                }
+                
+                // 一般病人直接掛號
+                performAddPatient(false);
+            };
+
+            // 2. Actual DB Operation
+            const performAddPatient = async (shouldSuspendRoom) => {
                 if (!user) return;
                 setLoading(true);
+                setCriticalConfirmData(null); // Close modal if open
 
                 try {
                     const assignedRoomId = parseInt(targetRoom);
@@ -377,7 +333,16 @@
 
                         const newPatientRef = doc(collection(db, PATIENTS_COLLECTION));
                         transaction.set(newPatientRef, newPatient);
-                        transaction.set(stateRef, { rotation: newRotation }, { merge: true });
+                        
+                        let updatePayload = { rotation: newRotation };
+                        
+                        // Handle Automatic Suspension if requested
+                        if (shouldSuspendRoom) {
+                            const newSuspensionTime = Date.now() + SUSPENSION_DURATION_MS;
+                            updatePayload[`suspensions.${assignedRoomId}`] = newSuspensionTime;
+                        }
+
+                        transaction.set(stateRef, updatePayload, { merge: true });
                     });
 
                     setInputMrn('');
@@ -392,26 +357,65 @@
                 }
             };
 
-            const handleDeletePatient = async (id) => {
-                if (window.confirm && !window.confirm('確定要移除此病歷號嗎？')) return; 
-                try {
-                    await deleteDoc(doc(db, PATIENTS_COLLECTION, id));
-                } catch (e) { console.error(e); }
-            };
-
             const toggleSuspension = async (roomId) => {
-                const current = systemState.suspensions?.[roomId];
-                const isSuspended = current && current > Date.now();
-                const newState = isSuspended ? null : Date.now() + SUSPENSION_DURATION_MS;
+                const state = getRoomSuspensionState(roomId);
+                // If Active or Expired, we want to Clear it (Resume). 
+                // If None, we want to Start it (Suspend).
+                const shouldSuspend = state === 'NONE';
+                
+                const newState = shouldSuspend ? Date.now() + SUSPENSION_DURATION_MS : null;
                 
                 const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                await updateDoc(stateRef, { [`suspensions.${roomId}`]: newState });
+                
+                // If we are clearing a specific room, use deleteField() pattern ideally, 
+                // but setting to null or removing key works with how we parse it.
+                // Firestore update with nested fields:
+                await updateDoc(stateRef, {
+                    [`suspensions.${roomId}`]: newState || 0 // Use 0 or null to signify removal logic
+                });
+                
+                if (!shouldSuspend) {
+                    // Cleanup: actually delete the field to keep DB clean (optional but good)
+                    // For simplicity, we just set it to null/0 above and check for truthiness
+                }
             };
 
+            const handleResetRotation = async (mode) => {
+                if (!window.confirm("確定重置輪序?")) return;
+                setAdminLoading(true);
+                try {
+                    const updateData = mode === 'all' 
+                        ? { 'rotation.level1_next': 1, 'rotation.others_next': 1 }
+                        : mode === 'level1' ? { 'rotation.level1_next': 1 } : { 'rotation.others_next': 1 };
+                    
+                    await updateDoc(doc(db, STATE_COLLECTION, STATE_DOC_ID), updateData);
+                } catch (e) { alert(e.message); }
+                finally { setAdminLoading(false); }
+            };
+
+            const handleClearPatients = async (roomId) => {
+                if (!window.confirm("確定清空病人資料?")) return;
+                setAdminLoading(true);
+                try {
+                    const q = roomId ? query(collection(db, PATIENTS_COLLECTION), where("roomId", "==", roomId)) : query(collection(db, PATIENTS_COLLECTION));
+                    const snapshot = await getDocs(q);
+                    const batch = writeBatch(db);
+                    snapshot.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                } catch (e) { alert(e.message); }
+                finally { setAdminLoading(false); }
+            };
+
+            const handleDeletePatient = async (id) => {
+                if (window.confirm && !window.confirm('確定要移除此病歷號嗎？')) return; 
+                try { await deleteDoc(doc(db, PATIENTS_COLLECTION, id)); } catch (e) {}
+            };
+
+            // --- Render Helpers ---
             const getFormatRemainingTime = (timestamp) => {
                 if (!timestamp) return '';
                 const diff = timestamp - Date.now();
-                if (diff <= 0) return '即將恢復';
+                if (diff <= 0) return '00分00秒'; // Should be handled by Expired state usually
                 const m = Math.floor(diff / 60000);
                 const s = Math.floor((diff % 60000) / 1000);
                 const ss = s < 10 ? `0${s}` : s;
@@ -426,6 +430,44 @@
 
             return (
                 <div className="min-h-screen bg-gray-50 text-gray-800 font-sans p-2 md:p-4">
+                    
+                    {/* CRITICAL PATIENT MODAL */}
+                    <Modal 
+                        isOpen={!!criticalConfirmData} 
+                        onClose={() => setCriticalConfirmData(null)}
+                        title={<><AlertTriangle className="text-red-600" /> 重症病人確認</>}
+                        showClose={false}
+                    >
+                         <div className="text-center space-y-4">
+                            <p className="text-lg font-bold text-gray-800">
+                                您正在將 <span className="text-red-600">OHCA/Trauma</span> 病人<br/>掛入 
+                                <span className="text-indigo-600 text-2xl mx-2">{criticalConfirmData?.targetRoomName}</span>
+                            </p>
+                            <p className="text-gray-600">是否要同步將該診間設為<br/><span className="font-bold text-gray-800">停診 30 分鐘</span> 以進行急救？</p>
+                            
+                            <div className="flex flex-col gap-3 mt-4">
+                                <button 
+                                    onClick={() => performAddPatient(true)}
+                                    className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold shadow text-lg flex items-center justify-center gap-2"
+                                >
+                                    <PauseCircle size={20} /> 是，掛號並停診
+                                </button>
+                                <button 
+                                    onClick={() => performAddPatient(false)}
+                                    className="w-full bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-bold shadow text-lg"
+                                >
+                                    否，僅掛號
+                                </button>
+                                <button 
+                                    onClick={() => setCriticalConfirmData(null)}
+                                    className="w-full bg-white border-2 border-gray-300 text-gray-600 py-2 rounded-lg font-bold hover:bg-gray-50"
+                                >
+                                    取消
+                                </button>
+                            </div>
+                        </div>
+                    </Modal>
+
                     {/* ADMIN MODAL */}
                     <Modal 
                         isOpen={isSettingsOpen} 
@@ -433,52 +475,20 @@
                         title="⚙️ 交班與系統管理"
                     >
                         <div className="space-y-6">
-                            {/* Section 1: Reset Rotation */}
                             <div>
                                 <h4 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
-                                    <RefreshCw size={18} /> 輪序重置 (指派下一位回到診一)
+                                    <RefreshCw size={18} /> 輪序重置
                                 </h4>
                                 <div className="grid grid-cols-2 gap-2 mb-2">
-                                    <button 
-                                        disabled={adminLoading}
-                                        onClick={() => handleResetRotation('level1')}
-                                        className="bg-blue-100 hover:bg-blue-200 text-blue-800 py-2 rounded font-bold transition-colors disabled:opacity-50"
-                                    >
-                                        重置 L1 輪序
-                                    </button>
-                                    <button 
-                                        disabled={adminLoading}
-                                        onClick={() => handleResetRotation('others')}
-                                        className="bg-green-100 hover:bg-green-200 text-green-800 py-2 rounded font-bold transition-colors disabled:opacity-50"
-                                    >
-                                        重置 其他輪序
-                                    </button>
+                                    <button disabled={adminLoading} onClick={() => handleResetRotation('level1')} className="bg-blue-100 text-blue-800 py-2 rounded font-bold">L1 重置</button>
+                                    <button disabled={adminLoading} onClick={() => handleResetRotation('others')} className="bg-green-100 text-green-800 py-2 rounded font-bold">其他重置</button>
                                 </div>
-                                <button 
-                                    disabled={adminLoading}
-                                    onClick={() => handleResetRotation('all')}
-                                    className="w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-800 py-2 rounded font-bold transition-colors border-2 border-indigo-200 disabled:opacity-50"
-                                >
-                                    全部重置 (ALL)
-                                </button>
-                                <p className="text-xs text-gray-400 mt-1">* 僅重置電腦的「下一位」建議，不影響已掛號名單。</p>
+                                <button disabled={adminLoading} onClick={() => handleResetRotation('all')} className="w-full bg-indigo-100 text-indigo-800 py-2 rounded font-bold border-2 border-indigo-200">全部重置</button>
                             </div>
-
                             <hr className="border-gray-200" />
-
-                            {/* Section 2: Clear Data */}
                             <div>
-                                <h4 className="font-bold text-red-700 mb-2 flex items-center gap-2">
-                                    <Trash2 size={18} /> 危險操作區
-                                </h4>
-                                <button 
-                                    disabled={adminLoading}
-                                    onClick={() => handleClearPatients(null)}
-                                    className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
-                                >
-                                    {adminLoading ? '處理中...' : '⚠️ 清除所有病人資料 (交班/換日)'}
-                                </button>
-                                <p className="text-xs text-red-400 mt-2 font-bold">* 此動作無法復原，請謹慎使用。</p>
+                                <h4 className="font-bold text-red-700 mb-2 flex items-center gap-2"><Trash2 size={18} /> 危險操作區</h4>
+                                <button disabled={adminLoading} onClick={() => handleClearPatients(null)} className="w-full bg-red-600 text-white py-3 rounded-lg font-bold shadow">清除所有資料</button>
                             </div>
                         </div>
                     </Modal>
@@ -488,39 +498,17 @@
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.2 交班管理)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.3 智慧警示)</h1>
                             </div>
-                            
                             <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full">
-                                <div className="text-xs font-bold text-gray-500 px-2 whitespace-nowrap flex items-center gap-1">
-                                    <Settings size={14}/> 開診數:
-                                </div>
+                                <div className="text-xs font-bold text-gray-500 px-2 whitespace-nowrap flex items-center gap-1"><Settings size={14}/> 開診:</div>
                                 {[1, 2, 3, 4, 5, 6, 7].map(num => (
-                                    <button
-                                        key={num}
-                                        onClick={() => updateActiveRoomCount(num)}
-                                        className={`w-8 h-8 rounded-md font-bold text-sm transition-all
-                                            ${activeRoomCount === num 
-                                                ? 'bg-indigo-600 text-white shadow' 
-                                                : 'bg-white text-gray-600 hover:bg-gray-200'}`}
-                                    >
-                                        {num}
-                                    </button>
+                                    <button key={num} onClick={() => updateActiveRoomCount(num)} className={`w-8 h-8 rounded-md font-bold text-sm ${activeRoomCount === num ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>{num}</button>
                                 ))}
                             </div>
-
                             <div className="flex items-center gap-3">
-                                <button 
-                                    onClick={() => setIsSettingsOpen(true)}
-                                    className="flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-bold transition-colors border border-gray-300 text-sm"
-                                >
-                                    <Settings size={16} /> 交班/管理
-                                </button>
-
-                                <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap">
-                                    <span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-                                    {user ? '連線中' : '連線...'}
-                                </div>
+                                <button onClick={() => setIsSettingsOpen(true)} className="flex items-center gap-1 bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-bold border border-gray-300 text-sm"><Settings size={16} /> 交班/管理</button>
+                                <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap"><span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>{user ? '連線中' : '...'}</div>
                             </div>
                         </div>
                     </header>
@@ -541,7 +529,8 @@
 
                             {/* Rooms */}
                             {activeRooms.map(room => {
-                                const isSuspended = isRoomSuspended(room.id);
+                                const suspensionState = getRoomSuspensionState(room.id); // NONE, ACTIVE, EXPIRED
+                                const isSuspended = suspensionState !== 'NONE';
                                 const nextForLevel1 = calculateNextRoom(1) === room.id;
                                 const nextForOthers = calculateNextRoom(3) === room.id;
 
@@ -549,9 +538,14 @@
                                     <div key={room.id} className={`flex flex-col gap-2 rounded-lg ${room.color} bg-opacity-20 p-2 border ${room.border}`}>
                                         <div className={`${room.header} text-white font-bold text-center py-2 rounded shadow-sm text-lg relative whitespace-nowrap overflow-hidden text-ellipsis`}>
                                             {room.name}
-                                            {isSuspended && (
+                                            {suspensionState === 'ACTIVE' && (
                                                 <div className="absolute top-0 right-0 left-0 bottom-0 bg-red-600 bg-opacity-90 text-white flex items-center justify-center text-xs font-bold animate-pulse">
                                                     停診中
+                                                </div>
+                                            )}
+                                            {suspensionState === 'EXPIRED' && (
+                                                <div className="absolute top-0 right-0 left-0 bottom-0 bg-red-800 text-white flex items-center justify-center text-xs font-bold animate-bounce">
+                                                    ⚠️ 時間到
                                                 </div>
                                             )}
                                         </div>
@@ -559,18 +553,25 @@
                                         <div className="h-10 flex items-center justify-center">
                                             <button
                                                 onClick={() => toggleSuspension(room.id)}
-                                                className={`text-[10px] md:text-xs w-full py-1 rounded border shadow-sm transition-colors flex items-center justify-center gap-1 font-bold
-                                                    ${isSuspended 
-                                                    ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100' 
-                                                    : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
+                                                className={`text-[10px] md:text-xs w-full py-1 rounded border shadow-sm transition-all flex items-center justify-center gap-1 font-bold h-full
+                                                    ${suspensionState === 'ACTIVE' 
+                                                        ? 'bg-red-50 border-red-300 text-red-700' 
+                                                        : suspensionState === 'EXPIRED'
+                                                            ? 'bg-red-100 border-red-500 text-red-800 animate-flash-warning'
+                                                            : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
                                                     }`}
                                             >
-                                                {isSuspended ? (
+                                                {suspensionState === 'ACTIVE' ? (
                                                     <span className="flex flex-col items-center leading-none">
                                                         <span>恢復</span>
                                                         <span className="scale-90 font-mono text-red-600 countdown-text text-xs mt-0.5">
                                                             {getFormatRemainingTime(systemState.suspensions[room.id])}
                                                         </span>
+                                                    </span>
+                                                ) : suspensionState === 'EXPIRED' ? (
+                                                    <span className="flex flex-col items-center leading-none">
+                                                        <span className="text-sm">時間到</span>
+                                                        <span className="text-[10px]">點擊恢復</span>
                                                     </span>
                                                 ) : (
                                                     <>
@@ -613,7 +614,7 @@
                                     onChange={(e) => setInputMrn(e.target.value)}
                                     placeholder="輸入病歷號..."
                                     className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-xl font-mono"
-                                    onKeyDown={(e) => e.key === 'Enter' && handleAddPatient()}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleAddPatientClick()}
                                 />
                             </div>
 
@@ -687,7 +688,7 @@
                                 </div>
                                 
                                 <button
-                                    onClick={handleAddPatient}
+                                    onClick={handleAddPatientClick}
                                     disabled={!inputMrn || loading}
                                     className="h-[52px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-6 rounded-lg font-bold shadow-lg transition-transform active:scale-95 text-lg flex items-center justify-center gap-2 whitespace-nowrap self-end"
                                 >
@@ -704,46 +705,28 @@
                             <div className="pt-2 text-right pr-4 text-gray-500 font-medium text-sm">
                                 <div>時間 / 項目</div>
                             </div>
-
                             {activeRooms.map(room => {
                                 const roomPatients = patients.filter(p => p.roomId === room.id);
                                 return (
                                     <div key={room.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-[300px]">
                                         <div className={`${room.header} text-white font-bold text-center py-1 text-sm flex justify-between px-2 items-center`}>
                                             <span className="flex-1">{room.name}</span>
-                                            {/* 單診清空按鈕 */}
-                                            <button 
-                                                onClick={() => handleClearPatients(room.id)}
-                                                className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors"
-                                                title={`清空${room.name}病人`}
-                                            >
-                                                <Trash2 size={12} />
-                                            </button>
+                                            <button onClick={() => handleClearPatients(room.id)} className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors" title={`清空${room.name}病人`}><Trash2 size={12} /></button>
                                         </div>
                                         <div className="p-2 flex-1 overflow-y-auto max-h-[500px] space-y-2">
-                                            {roomPatients.length === 0 && (
-                                                <div className="text-center text-gray-300 py-8 text-sm italic">無病人</div>
-                                            )}
+                                            {roomPatients.length === 0 && <div className="text-center text-gray-300 py-8 text-sm italic">無病人</div>}
                                             {roomPatients.map(p => (
                                                 <div key={p.id} className="group relative bg-gray-50 p-2 rounded border border-gray-100 hover:border-indigo-200 transition-all">
                                                     <div className="flex justify-between items-start">
                                                         <div className="min-w-0">
                                                             <div className="font-mono font-bold text-gray-800 text-lg leading-none truncate">{p.mrn}</div>
                                                             <div className="flex gap-1 mt-1 flex-wrap">
-                                                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.level === 1 ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'}`}>
-                                                                    L{p.level}
-                                                                </span>
+                                                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.level === 1 ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'}`}>L{p.level}</span>
                                                                 {p.isMajorTrauma && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold">MT</span>}
                                                                 {p.isOhca && <span className="text-[10px] px-1.5 py-0.5 rounded bg-black text-white font-bold">OHCA</span>}
                                                             </div>
                                                         </div>
-                                                        <button 
-                                                            onClick={() => handleDeletePatient(p.id)}
-                                                            className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors"
-                                                            title="移除掛號"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
+                                                        <button onClick={() => handleDeletePatient(p.id)} className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors" title="移除掛號"><Trash2 size={16} /></button>
                                                     </div>
                                                 </div>
                                             ))}
