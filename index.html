@@ -241,9 +241,7 @@
                     };
 
                     await runTransaction(db, async (transaction) => {
-                        const newPatientRef = doc(collection(db, PATIENTS_COLLECTION));
-                        transaction.set(newPatientRef, newPatient);
-
+                        // 【修正】先讀取 State (READ FIRST)
                         const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
                         const stateDoc = await transaction.get(stateRef);
                         
@@ -251,16 +249,19 @@
                         let currentRotation = currentState.rotation || INITIAL_STATE.rotation;
                         let currentCount = currentState.activeRoomCount || 4;
 
+                        // 計算邏輯
                         let nextPointer = (assignedRoomId % currentCount) + 1;
-                        
                         const newRotation = {
                             ...currentRotation,
                             [rotationKey]: nextPointer
                         };
 
-                        transaction.update(stateRef, { 
-                            rotation: newRotation 
-                        });
+                        // 【修正】最後再一次寫入 (WRITE LAST)
+                        const newPatientRef = doc(collection(db, PATIENTS_COLLECTION));
+                        transaction.set(newPatientRef, newPatient);
+                        
+                        // 使用 set 搭配 merge: true 來更新狀態，確保文件不存在時也能建立
+                        transaction.set(stateRef, { rotation: newRotation }, { merge: true });
                     });
 
                     setInputMrn('');
@@ -269,8 +270,7 @@
                     
                 } catch (e) {
                     console.error("Add patient failed", e);
-                    // 這裡修改為顯示詳細錯誤，方便除錯
-                    alert(`掛號失敗: ${e.message}\n(請檢查 Firebase Firestore 規則是否設為 allow read, write: if true;)`);
+                    alert(`掛號失敗: ${e.message}\n(請確認 Firebase Firestore Rules 權限已開啟)`);
                 } finally {
                     setLoading(false);
                 }
