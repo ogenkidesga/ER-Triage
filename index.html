@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v3.1 加強版)</title>
+    <title>急診檢傷分診計數器 (v3.2 交班管理版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -41,7 +41,7 @@
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { 
             getFirestore, collection, doc, setDoc, onSnapshot, 
-            updateDoc, deleteDoc, serverTimestamp, query, orderBy, runTransaction 
+            updateDoc, deleteDoc, serverTimestamp, query, orderBy, runTransaction, writeBatch, where, getDocs
         } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
         import { 
             getAuth, signInAnonymously, onAuthStateChanged 
@@ -72,6 +72,12 @@
         const Stethoscope = ({ className, size }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4.8 2.3A.3.3 0 1 0 5.2.7l-1.5 2.5 1.1-.9z"></path><path d="M6 5a6 6 0 0 1 12 0v3"></path><path d="M11 17h2"></path><path d="M8 17a4 4 0 0 1 8 0v-4a2 2 0 1 0-4 0v2"></path><circle cx="12" cy="19" r="2"></circle></svg>
         );
+        const XCircle = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+        );
+        const RefreshCw = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        );
 
         // --- Firebase Config & Init (正式環境) ---
         const firebaseConfig = {
@@ -87,7 +93,6 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         
-        // 使用簡單的集合名稱
         const PATIENTS_COLLECTION = 'er_triage_patients';
         const STATE_COLLECTION = 'er_triage_state';
         const STATE_DOC_ID = 'main_v2';
@@ -114,6 +119,26 @@
 
         const SUSPENSION_DURATION_MS = 30 * 60 * 1000;
 
+        // --- Modal Component ---
+        const Modal = ({ isOpen, onClose, title, children }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+                        <div className="flex justify-between items-center p-4 border-b bg-gray-50">
+                            <h3 className="text-xl font-bold text-gray-800">{title}</h3>
+                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700 p-1 rounded-full hover:bg-gray-200">
+                                <XCircle size={24} />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            {children}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         function App() {
             const [user, setUser] = useState(null);
             const [patients, setPatients] = useState([]);
@@ -127,8 +152,9 @@
             const [loading, setLoading] = useState(false);
             const [, setTick] = useState(0);
             
-            // 新增：強制指定診間的狀態
             const [targetRoom, setTargetRoom] = useState(1);
+            const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+            const [adminLoading, setAdminLoading] = useState(false);
 
             // --- Auth & Data Fetching ---
             useEffect(() => {
@@ -142,10 +168,7 @@
                 initAuth();
                 
                 const unsubscribe = onAuthStateChanged(auth, setUser);
-                
-                // 改為每秒更新，實現秒級倒數
                 const timer = setInterval(() => setTick(t => t + 1), 1000);
-                
                 return () => {
                     unsubscribe();
                     clearInterval(timer);
@@ -156,10 +179,7 @@
                 if (!user) return;
 
                 // 1. Patients
-                const qPatients = query(
-                    collection(db, PATIENTS_COLLECTION),
-                    orderBy('timestamp', 'desc')
-                );
+                const qPatients = query(collection(db, PATIENTS_COLLECTION), orderBy('timestamp', 'desc'));
                 const unsubPatients = onSnapshot(qPatients, (snapshot) => {
                     const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setPatients(list);
@@ -195,13 +215,10 @@
                 return parseInt(level) === 1 ? 'level1_next' : 'others_next';
             };
 
-            // Calculate Next Available Room
             const calculateNextRoom = (level) => {
                 const rotationKey = getRotationType(level);
                 let pointer = systemState.rotation?.[rotationKey] || 1;
-                
                 if (pointer > activeRoomCount) pointer = 1;
-
                 let attempts = 0;
                 while (isRoomSuspended(pointer) && attempts < activeRoomCount) {
                     pointer = (pointer % activeRoomCount) + 1;
@@ -214,23 +231,19 @@
                 return calculateNextRoom(inputLevel);
             }, [inputLevel, systemState, activeRoomCount]);
 
-            // 當建議診間改變時，同步更新目標診間（預設為建議值）
             useEffect(() => {
                 setTargetRoom(suggestedRoomId);
             }, [suggestedRoomId]);
 
-            // --- Stats Calculation ---
             const stats = useMemo(() => {
                 const initialStats = {};
                 ROOM_DEFINITIONS.forEach(r => {
                     initialStats[r.id] = { level1: 0, others: 0, mt: 0, ohca: 0 };
                 });
-
                 patients.forEach(p => {
                     if (initialStats[p.roomId]) {
                         if (p.level === 1) initialStats[p.roomId].level1++;
                         else initialStats[p.roomId].others++;
-                        
                         if (p.isMajorTrauma) initialStats[p.roomId].mt++;
                         if (p.isOhca) initialStats[p.roomId].ohca++;
                     }
@@ -238,7 +251,92 @@
                 return initialStats;
             }, [patients]);
 
-            // --- Actions ---
+            // --- Admin Actions (交班/重置功能) ---
+            
+            // 1. 重置輪序
+            const handleResetRotation = async (mode) => {
+                let message = "";
+                let updateData = {};
+
+                if (mode === 'all') {
+                    message = "確定要將「所有輪序」重置回診一嗎？";
+                    updateData = { 
+                        'rotation.level1_next': 1, 
+                        'rotation.others_next': 1 
+                    };
+                } else if (mode === 'level1') {
+                    message = "確定要將「一級病人輪序」重置回診一嗎？";
+                    updateData = { 'rotation.level1_next': 1 };
+                } else {
+                    message = "確定要將「其他病人輪序」重置回診一嗎？";
+                    updateData = { 'rotation.others_next': 1 };
+                }
+
+                if (!window.confirm(message)) return;
+
+                setAdminLoading(true);
+                try {
+                    const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
+                    await updateDoc(stateRef, updateData);
+                    alert("輪序已重置！");
+                } catch (e) {
+                    alert(`重置失敗: ${e.message}`);
+                } finally {
+                    setAdminLoading(false);
+                }
+            };
+
+            // 2. 清空病人 (全部 或 指定診間)
+            const handleClearPatients = async (roomId = null) => {
+                let message = roomId 
+                    ? `警告：確定要清空「${ROOM_DEFINITIONS.find(r=>r.id===roomId).name}」的所有病人嗎？\n此動作無法復原！`
+                    : "⚠️ 危險操作：確定要清空「全部」病人資料嗎？\n此動作通常用於交班或換日，無法復原！";
+
+                if (!window.confirm(message)) return;
+
+                setAdminLoading(true);
+                try {
+                    let q;
+                    if (roomId) {
+                        q = query(collection(db, PATIENTS_COLLECTION), where("roomId", "==", roomId));
+                    } else {
+                        q = query(collection(db, PATIENTS_COLLECTION));
+                    }
+                    
+                    const snapshot = await getDocs(q);
+                    const batch = writeBatch(db);
+                    
+                    if (snapshot.empty) {
+                        alert("目前沒有資料可刪除。");
+                        return;
+                    }
+
+                    snapshot.docs.forEach((doc) => {
+                        batch.delete(doc.ref);
+                    });
+
+                    await batch.commit();
+                    
+                    if (!roomId) {
+                        // 如果是全清，通常也想要重置輪序，詢問一下
+                        if (window.confirm("資料已清空。\n是否順便將「看診輪序」歸零回診一？")) {
+                            const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
+                            await updateDoc(stateRef, { 
+                                'rotation.level1_next': 1, 
+                                'rotation.others_next': 1 
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert(`清除失敗: ${e.message}`);
+                } finally {
+                    setAdminLoading(false);
+                }
+            };
+
+
+            // --- Standard Actions ---
             const updateActiveRoomCount = async (count) => {
                 const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
                 await updateDoc(stateRef, { activeRoomCount: count });
@@ -250,7 +348,6 @@
                 setLoading(true);
 
                 try {
-                    // 使用使用者選擇的 targetRoom，而非強制建議的 suggestedRoomId
                     const assignedRoomId = parseInt(targetRoom);
                     const rotationKey = getRotationType(inputLevel);
                     
@@ -271,8 +368,6 @@
                         let currentRotation = currentState.rotation || INITIAL_STATE.rotation;
                         let currentCount = currentState.activeRoomCount || 4;
 
-                        // 邏輯修正：無論是自動還是強制，掛入該診後，輪序指標都移往下一間
-                        // 這樣可以保持佇列的流動性 (若你強制掛了診3，下一位病人自然應該掛診4)
                         let nextPointer = (assignedRoomId % currentCount) + 1;
                         
                         const newRotation = {
@@ -288,7 +383,6 @@
                     setInputMrn('');
                     setIsMajorTrauma(false);
                     setIsOhca(false);
-                    // 成功後讓焦點回到輸入框 (可選)
                     
                 } catch (e) {
                     console.error("Add patient failed", e);
@@ -311,20 +405,15 @@
                 const newState = isSuspended ? null : Date.now() + SUSPENSION_DURATION_MS;
                 
                 const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                await updateDoc(stateRef, {
-                    [`suspensions.${roomId}`]: newState
-                });
+                await updateDoc(stateRef, { [`suspensions.${roomId}`]: newState });
             };
 
-            // --- Render Helpers ---
             const getFormatRemainingTime = (timestamp) => {
                 if (!timestamp) return '';
                 const diff = timestamp - Date.now();
                 if (diff <= 0) return '即將恢復';
-                
                 const m = Math.floor(diff / 60000);
                 const s = Math.floor((diff % 60000) / 1000);
-                // 補零讓格式更整齊
                 const ss = s < 10 ? `0${s}` : s;
                 return `${m}分${ss}秒`;
             };
@@ -337,12 +426,69 @@
 
             return (
                 <div className="min-h-screen bg-gray-50 text-gray-800 font-sans p-2 md:p-4">
+                    {/* ADMIN MODAL */}
+                    <Modal 
+                        isOpen={isSettingsOpen} 
+                        onClose={() => setIsSettingsOpen(false)}
+                        title="⚙️ 交班與系統管理"
+                    >
+                        <div className="space-y-6">
+                            {/* Section 1: Reset Rotation */}
+                            <div>
+                                <h4 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
+                                    <RefreshCw size={18} /> 輪序重置 (指派下一位回到診一)
+                                </h4>
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                    <button 
+                                        disabled={adminLoading}
+                                        onClick={() => handleResetRotation('level1')}
+                                        className="bg-blue-100 hover:bg-blue-200 text-blue-800 py-2 rounded font-bold transition-colors disabled:opacity-50"
+                                    >
+                                        重置 L1 輪序
+                                    </button>
+                                    <button 
+                                        disabled={adminLoading}
+                                        onClick={() => handleResetRotation('others')}
+                                        className="bg-green-100 hover:bg-green-200 text-green-800 py-2 rounded font-bold transition-colors disabled:opacity-50"
+                                    >
+                                        重置 其他輪序
+                                    </button>
+                                </div>
+                                <button 
+                                    disabled={adminLoading}
+                                    onClick={() => handleResetRotation('all')}
+                                    className="w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-800 py-2 rounded font-bold transition-colors border-2 border-indigo-200 disabled:opacity-50"
+                                >
+                                    全部重置 (ALL)
+                                </button>
+                                <p className="text-xs text-gray-400 mt-1">* 僅重置電腦的「下一位」建議，不影響已掛號名單。</p>
+                            </div>
+
+                            <hr className="border-gray-200" />
+
+                            {/* Section 2: Clear Data */}
+                            <div>
+                                <h4 className="font-bold text-red-700 mb-2 flex items-center gap-2">
+                                    <Trash2 size={18} /> 危險操作區
+                                </h4>
+                                <button 
+                                    disabled={adminLoading}
+                                    onClick={() => handleClearPatients(null)}
+                                    className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+                                >
+                                    {adminLoading ? '處理中...' : '⚠️ 清除所有病人資料 (交班/換日)'}
+                                </button>
+                                <p className="text-xs text-red-400 mt-2 font-bold">* 此動作無法復原，請謹慎使用。</p>
+                            </div>
+                        </div>
+                    </Modal>
+
                     {/* HEADER */}
                     <header className="mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.1 加強版)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.2 交班管理)</h1>
                             </div>
                             
                             <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full">
@@ -363,9 +509,18 @@
                                 ))}
                             </div>
 
-                            <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap">
-                                <span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
-                                {user ? '已連線同步中' : '連線中...'}
+                            <div className="flex items-center gap-3">
+                                <button 
+                                    onClick={() => setIsSettingsOpen(true)}
+                                    className="flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-bold transition-colors border border-gray-300 text-sm"
+                                >
+                                    <Settings size={16} /> 交班/管理
+                                </button>
+
+                                <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap">
+                                    <span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                                    {user ? '連線中' : '連線...'}
+                                </div>
                             </div>
                         </div>
                     </header>
@@ -554,8 +709,16 @@
                                 const roomPatients = patients.filter(p => p.roomId === room.id);
                                 return (
                                     <div key={room.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-[300px]">
-                                        <div className={`${room.header} text-white font-bold text-center py-1 text-sm`}>
-                                            {room.name}
+                                        <div className={`${room.header} text-white font-bold text-center py-1 text-sm flex justify-between px-2 items-center`}>
+                                            <span className="flex-1">{room.name}</span>
+                                            {/* 單診清空按鈕 */}
+                                            <button 
+                                                onClick={() => handleClearPatients(room.id)}
+                                                className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors"
+                                                title={`清空${room.name}病人`}
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
                                         </div>
                                         <div className="p-2 flex-1 overflow-y-auto max-h-[500px] space-y-2">
                                             {roomPatients.length === 0 && (
