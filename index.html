@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (正式版)</title>
+    <title>急診檢傷分診計數器 (v3.0 修復版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -241,7 +241,7 @@
                     };
 
                     await runTransaction(db, async (transaction) => {
-                        // 【修正】先讀取 State (READ FIRST)
+                        // 【修正】確保先讀取 (Get)，這是交易的必要條件
                         const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
                         const stateDoc = await transaction.get(stateRef);
                         
@@ -256,11 +256,11 @@
                             [rotationKey]: nextPointer
                         };
 
-                        // 【修正】最後再一次寫入 (WRITE LAST)
+                        // 【修正】確保讀取完畢後，再進行寫入 (Set/Update)
                         const newPatientRef = doc(collection(db, PATIENTS_COLLECTION));
                         transaction.set(newPatientRef, newPatient);
                         
-                        // 使用 set 搭配 merge: true 來更新狀態，確保文件不存在時也能建立
+                        // 使用 set 搭配 merge: true
                         transaction.set(stateRef, { rotation: newRotation }, { merge: true });
                     });
 
@@ -314,7 +314,7 @@
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (正式版)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.0 修復版)</h1>
                             </div>
                             
                             <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full">
