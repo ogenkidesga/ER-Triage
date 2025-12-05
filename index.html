@@ -62,14 +62,13 @@
         );
 
         // --- Firebase Config & Init (正式環境) ---
-        // 主任請注意：請將下方的 { ... } 替換為您從 Firebase Console 複製的內容
         const firebaseConfig = {
             apiKey: "AIzaSyAA9_VgFhFKJZidgfbYkAI4g46SowgVBYY",
-  authDomain: "er-triage-b1ac6.firebaseapp.com",
-  projectId: "er-triage-b1ac6",
-  storageBucket: "er-triage-b1ac6.firebasestorage.app",
-  messagingSenderId: "691660481020",
-  appId: "1:691660481020:web:8c06b22c69320cbce81279"
+            authDomain: "er-triage-b1ac6.firebaseapp.com",
+            projectId: "er-triage-b1ac6",
+            storageBucket: "er-triage-b1ac6.firebasestorage.app",
+            messagingSenderId: "691660481020",
+            appId: "1:691660481020:web:8c06b22c69320cbce81279"
         };
 
         const app = initializeApp(firebaseConfig);
@@ -270,7 +269,8 @@
                     
                 } catch (e) {
                     console.error("Add patient failed", e);
-                    alert("掛號失敗，請檢查網路連線");
+                    // 這裡修改為顯示詳細錯誤，方便除錯
+                    alert(`掛號失敗: ${e.message}\n(請檢查 Firebase Firestore 規則是否設為 allow read, write: if true;)`);
                 } finally {
                     setLoading(false);
                 }
