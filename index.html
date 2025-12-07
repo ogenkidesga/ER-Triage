@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v3.3.1 修復版)</title>
+    <title>急診檢傷分診計數器 (v3.8 密碼保護版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -90,6 +90,12 @@
         const AlertTriangle = ({ className, size }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         );
+        const Lock = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        );
+        const Unlock = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>
+        );
 
         // --- Firebase Config & Init (正式環境) ---
         const firebaseConfig = {
@@ -121,15 +127,19 @@
         ];
 
         const INITIAL_STATE = {
-            activeRoomCount: 4, 
+            activeRoomIds: [1, 2, 3, 4], // 預設開啟診 1-4
+            activeRoomCount: 4, // 保留舊欄位兼容
             rotation: {
                 level1_next: 1,
-                others_next: 1
+                others_next: 1,
+                level1_last: 0, 
+                others_last: 0 
             },
             suspensions: {}
         };
 
         const SUSPENSION_DURATION_MS = 30 * 60 * 1000;
+        const ADMIN_PASSWORD = "5323911@";
 
         // --- Modal Components ---
         const Modal = ({ isOpen, onClose, title, children, showClose = true }) => {
@@ -173,6 +183,11 @@
             // New State for Critical Patient Confirmation
             const [criticalConfirmData, setCriticalConfirmData] = useState(null);
 
+            // Authentication State
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [showAuthModal, setShowAuthModal] = useState(false);
+            const [passwordInput, setPasswordInput] = useState('');
+
             // --- Auth & Data Fetching ---
             useEffect(() => {
                 const initAuth = async () => {
@@ -184,6 +199,12 @@
                 };
                 initAuth();
                 
+                // Check local storage for persistent admin login
+                const storedAuth = localStorage.getItem('er_triage_auth');
+                if (storedAuth === ADMIN_PASSWORD) {
+                    setIsAdmin(true);
+                }
+
                 const unsubscribe = onAuthStateChanged(auth, setUser);
                 const timer = setInterval(() => setTick(t => t + 1), 1000);
                 return () => {
@@ -195,14 +216,12 @@
             useEffect(() => {
                 if (!user) return;
 
-                // 1. Patients
                 const qPatients = query(collection(db, PATIENTS_COLLECTION), orderBy('timestamp', 'desc'));
                 const unsubPatients = onSnapshot(qPatients, (snapshot) => {
                     const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setPatients(list);
                 }, (error) => console.error("Patients fetch error:", error));
 
-                // 2. System State
                 const docRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
                 const unsubState = onSnapshot(docRef, (docSnap) => {
                     if (docSnap.exists()) {
@@ -219,37 +238,63 @@
             }, [user]);
 
             // --- Logic Helpers ---
-            const activeRoomCount = systemState.activeRoomCount || 4;
-            const activeRooms = ROOM_DEFINITIONS.slice(0, activeRoomCount);
+            const activeRoomIds = useMemo(() => {
+                if (systemState.activeRoomIds && Array.isArray(systemState.activeRoomIds)) {
+                    return systemState.activeRoomIds.sort((a,b) => a-b);
+                }
+                const count = systemState.activeRoomCount || 4;
+                return Array.from({length: count}, (_, i) => i + 1);
+            }, [systemState]);
 
-            // Updated Logic: Check for *active* suspension vs *expired* suspension
+            const activeRooms = useMemo(() => {
+                return ROOM_DEFINITIONS.filter(r => activeRoomIds.includes(r.id));
+            }, [activeRoomIds]);
+
+            const getNextIdFromLast = (lastRoomId, idsList) => {
+                if (!idsList || idsList.length === 0) return 1;
+                const sorted = [...idsList].sort((a,b)=>a-b);
+                const nextGreater = sorted.find(id => id > lastRoomId);
+                return nextGreater || sorted[0];
+            };
+
             const getRoomSuspensionState = (roomId) => {
                 const suspendedUntil = systemState.suspensions?.[roomId];
-                if (!suspendedUntil) return 'NONE'; // No suspension record
-                if (suspendedUntil > Date.now()) return 'ACTIVE'; // Counting down
-                return 'EXPIRED'; // Time reached 0, but record still exists (Alert state)
+                if (!suspendedUntil) return 'NONE'; 
+                if (suspendedUntil > Date.now()) return 'ACTIVE'; 
+                return 'EXPIRED'; 
             };
 
             const isRoomActiveSuspension = (roomId) => {
                 return getRoomSuspensionState(roomId) === 'ACTIVE';
             };
             
-            // Logic for pointer skipping: We only skip if ACTIVELY suspended
             const isRoomSkippable = (roomId) => {
                 return isRoomActiveSuspension(roomId);
             };
 
             const getRotationType = (level) => {
-                return parseInt(level) === 1 ? 'level1_next' : 'others_next';
+                return parseInt(level) === 1 ? 'level1' : 'others';
             };
 
             const calculateNextRoom = (level) => {
-                const rotationKey = getRotationType(level);
-                let pointer = systemState.rotation?.[rotationKey] || 1;
-                if (pointer > activeRoomCount) pointer = 1;
+                const type = getRotationType(level);
+                const lastKey = type + '_last';
+                const nextKey = type + '_next';
+                const lastRoomId = systemState.rotation?.[lastKey];
+                
+                let pointer;
+                if (lastRoomId !== undefined && lastRoomId !== 0) {
+                    pointer = getNextIdFromLast(lastRoomId, activeRoomIds);
+                } else {
+                    pointer = systemState.rotation?.[nextKey] || 1;
+                    if (!activeRoomIds.includes(pointer)) {
+                        pointer = activeRoomIds[0] || 1;
+                    }
+                }
+
                 let attempts = 0;
-                while (isRoomSkippable(pointer) && attempts < activeRoomCount) {
-                    pointer = (pointer % activeRoomCount) + 1;
+                while (isRoomSkippable(pointer) && attempts < activeRoomIds.length) {
+                    pointer = getNextIdFromLast(pointer, activeRoomIds);
                     attempts++;
                 }
                 return pointer;
@@ -257,7 +302,7 @@
 
             const suggestedRoomId = useMemo(() => {
                 return calculateNextRoom(inputLevel);
-            }, [inputLevel, systemState, activeRoomCount]);
+            }, [inputLevel, systemState, activeRoomIds]);
 
             useEffect(() => {
                 setTargetRoom(suggestedRoomId);
@@ -279,39 +324,72 @@
                 return initialStats;
             }, [patients]);
 
-            // --- Actions ---
-
-            // **修復：補回 updateActiveRoomCount 函式**
-            const updateActiveRoomCount = async (count) => {
-                const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                await updateDoc(stateRef, { activeRoomCount: count });
+            // --- Auth Actions ---
+            const handleLogin = () => {
+                if (passwordInput === ADMIN_PASSWORD) {
+                    setIsAdmin(true);
+                    localStorage.setItem('er_triage_auth', ADMIN_PASSWORD);
+                    setShowAuthModal(false);
+                    setPasswordInput('');
+                } else {
+                    alert("密碼錯誤！");
+                    setPasswordInput('');
+                }
             };
 
-            // 1. Initial Trigger for Add Patient
+            const handleLogout = () => {
+                if (window.confirm("確定要登出並鎖定儀表板嗎？")) {
+                    setIsAdmin(false);
+                    localStorage.removeItem('er_triage_auth');
+                    setIsSettingsOpen(false);
+                }
+            };
+
+            const handleSettingsClick = () => {
+                if (!isAdmin) {
+                    setShowAuthModal(true);
+                } else {
+                    setIsSettingsOpen(true);
+                }
+            };
+
+            // --- Actions ---
+            const toggleActiveRoom = async (roomId) => {
+                if (!isAdmin) return; // Protected
+                const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
+                let newIds = [...activeRoomIds];
+                if (newIds.includes(roomId)) {
+                    if (newIds.length <= 1) return;
+                    newIds = newIds.filter(id => id !== roomId);
+                } else {
+                    newIds.push(roomId);
+                }
+                newIds.sort((a,b) => a-b);
+                await updateDoc(stateRef, { activeRoomIds: newIds, activeRoomCount: newIds.length });
+            };
+
             const handleAddPatientClick = () => {
+                if (!isAdmin) return; // Protected
                 if (!inputMrn.trim()) return;
-                
-                // 判斷是否為重症
                 if (isOhca || isMajorTrauma) {
                     setCriticalConfirmData({
-                        targetRoomName: activeRooms.find(r => r.id === parseInt(targetRoom))?.name || `診${targetRoom}`
+                        targetRoomName: ROOM_DEFINITIONS.find(r => r.id === parseInt(targetRoom))?.name || `診${targetRoom}`
                     });
-                    return; // Stop here, wait for modal
+                    return; 
                 }
-                
-                // 一般病人直接掛號
                 performAddPatient(false);
             };
 
-            // 2. Actual DB Operation
             const performAddPatient = async (shouldSuspendRoom) => {
-                if (!user) return;
+                if (!user || !isAdmin) return; // Protected
                 setLoading(true);
-                setCriticalConfirmData(null); // Close modal if open
+                setCriticalConfirmData(null); 
 
                 try {
                     const assignedRoomId = parseInt(targetRoom);
-                    const rotationKey = getRotationType(inputLevel);
+                    const type = getRotationType(inputLevel);
+                    const nextKey = type + '_next';
+                    const lastKey = type + '_last';
                     
                     const newPatient = {
                         mrn: inputMrn.trim(),
@@ -325,36 +403,39 @@
                     await runTransaction(db, async (transaction) => {
                         const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
                         const stateDoc = await transaction.get(stateRef);
-                        
                         let currentState = stateDoc.exists() ? stateDoc.data() : INITIAL_STATE;
                         let currentRotation = currentState.rotation || INITIAL_STATE.rotation;
-                        let currentCount = currentState.activeRoomCount || 4;
-
-                        let nextPointer = (assignedRoomId % currentCount) + 1;
-                        
+                        let currentActiveIds = [];
+                        if (currentState.activeRoomIds && Array.isArray(currentState.activeRoomIds)) {
+                            currentActiveIds = currentState.activeRoomIds.sort((a,b)=>a-b);
+                        } else {
+                            const c = currentState.activeRoomCount || 4;
+                            currentActiveIds = Array.from({length: c}, (_, i) => i + 1);
+                        }
+                        const currIdx = currentActiveIds.indexOf(assignedRoomId);
+                        let nextPointerLegacy;
+                        if (currIdx === -1) {
+                            nextPointerLegacy = currentActiveIds[0];
+                        } else {
+                            nextPointerLegacy = currentActiveIds[(currIdx + 1) % currentActiveIds.length];
+                        }
                         const newRotation = {
                             ...currentRotation,
-                            [rotationKey]: nextPointer
+                            [nextKey]: nextPointerLegacy,
+                            [lastKey]: assignedRoomId
                         };
-
                         const newPatientRef = doc(collection(db, PATIENTS_COLLECTION));
                         transaction.set(newPatientRef, newPatient);
-                        
                         let updatePayload = { rotation: newRotation };
-                        
-                        // Handle Automatic Suspension if requested
                         if (shouldSuspendRoom) {
                             const newSuspensionTime = Date.now() + SUSPENSION_DURATION_MS;
                             updatePayload[`suspensions.${assignedRoomId}`] = newSuspensionTime;
                         }
-
                         transaction.set(stateRef, updatePayload, { merge: true });
                     });
-
                     setInputMrn('');
                     setIsMajorTrauma(false);
                     setIsOhca(false);
-                    
                 } catch (e) {
                     console.error("Add patient failed", e);
                     alert(`掛號失敗: ${e.message}`);
@@ -364,42 +445,35 @@
             };
 
             const toggleSuspension = async (roomId) => {
+                if (!isAdmin) return; // Protected
                 const state = getRoomSuspensionState(roomId);
-                // If Active or Expired, we want to Clear it (Resume). 
-                // If None, we want to Start it (Suspend).
                 const shouldSuspend = state === 'NONE';
-                
                 const newState = shouldSuspend ? Date.now() + SUSPENSION_DURATION_MS : null;
-                
                 const stateRef = doc(db, STATE_COLLECTION, STATE_DOC_ID);
-                
-                // If we are clearing a specific room, use deleteField() pattern ideally, 
-                // but setting to null or removing key works with how we parse it.
-                // Firestore update with nested fields:
-                await updateDoc(stateRef, {
-                    [`suspensions.${roomId}`]: newState || 0 // Use 0 or null to signify removal logic
-                });
-                
-                if (!shouldSuspend) {
-                    // Cleanup: actually delete the field to keep DB clean (optional but good)
-                    // For simplicity, we just set it to null/0 above and check for truthiness
-                }
+                await updateDoc(stateRef, { [`suspensions.${roomId}`]: newState || 0 });
             };
 
             const handleResetRotation = async (mode) => {
+                if (!isAdmin) return; // Protected
                 if (!window.confirm("確定重置輪序?")) return;
                 setAdminLoading(true);
                 try {
-                    const updateData = mode === 'all' 
-                        ? { 'rotation.level1_next': 1, 'rotation.others_next': 1 }
-                        : mode === 'level1' ? { 'rotation.level1_next': 1 } : { 'rotation.others_next': 1 };
-                    
+                    const updateData = {};
+                    if (mode === 'all' || mode === 'level1') {
+                        updateData['rotation.level1_next'] = 1;
+                        updateData['rotation.level1_last'] = 0; 
+                    }
+                    if (mode === 'all' || mode === 'others') {
+                        updateData['rotation.others_next'] = 1;
+                        updateData['rotation.others_last'] = 0;
+                    }
                     await updateDoc(doc(db, STATE_COLLECTION, STATE_DOC_ID), updateData);
                 } catch (e) { alert(e.message); }
                 finally { setAdminLoading(false); }
             };
 
             const handleClearPatients = async (roomId) => {
+                if (!isAdmin) return; // Protected
                 if (!window.confirm("確定清空病人資料?")) return;
                 setAdminLoading(true);
                 try {
@@ -413,6 +487,7 @@
             };
 
             const handleDeletePatient = async (id) => {
+                if (!isAdmin) return; // Protected
                 if (window.confirm && !window.confirm('確定要移除此病歷號嗎？')) return; 
                 try { await deleteDoc(doc(db, PATIENTS_COLLECTION, id)); } catch (e) {}
             };
@@ -421,7 +496,7 @@
             const getFormatRemainingTime = (timestamp) => {
                 if (!timestamp) return '';
                 const diff = timestamp - Date.now();
-                if (diff <= 0) return '00分00秒'; // Should be handled by Expired state usually
+                if (diff <= 0) return '00分00秒'; 
                 const m = Math.floor(diff / 60000);
                 const s = Math.floor((diff % 60000) / 1000);
                 const ss = s < 10 ? `0${s}` : s;
@@ -430,13 +505,39 @@
 
             const gridStyle = {
                 display: 'grid',
-                gridTemplateColumns: `100px repeat(${activeRoomCount}, minmax(0, 1fr))`,
+                gridTemplateColumns: `100px repeat(${activeRooms.length}, minmax(0, 1fr))`,
                 gap: '0.5rem'
             };
 
             return (
                 <div className="min-h-screen bg-gray-50 text-gray-800 font-sans p-2 md:p-4">
                     
+                    {/* AUTH MODAL */}
+                    <Modal 
+                        isOpen={showAuthModal} 
+                        onClose={() => setShowAuthModal(false)}
+                        title="🔒 管理員登入"
+                    >
+                        <div className="space-y-4">
+                            <p className="text-gray-600">請輸入管理密碼以解鎖儀表板控制權：</p>
+                            <input 
+                                type="password" 
+                                value={passwordInput}
+                                onChange={(e) => setPasswordInput(e.target.value)}
+                                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 text-xl font-mono text-center"
+                                placeholder="●●●●●●●●"
+                                autoFocus
+                                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                            />
+                            <button 
+                                onClick={handleLogin}
+                                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow"
+                            >
+                                登入解鎖
+                            </button>
+                        </div>
+                    </Modal>
+
                     {/* CRITICAL PATIENT MODAL */}
                     <Modal 
                         isOpen={!!criticalConfirmData} 
@@ -474,7 +575,7 @@
                         </div>
                     </Modal>
 
-                    {/* ADMIN MODAL */}
+                    {/* ADMIN SETTINGS MODAL */}
                     <Modal 
                         isOpen={isSettingsOpen} 
                         onClose={() => setIsSettingsOpen(false)}
@@ -496,6 +597,13 @@
                                 <h4 className="font-bold text-red-700 mb-2 flex items-center gap-2"><Trash2 size={18} /> 危險操作區</h4>
                                 <button disabled={adminLoading} onClick={() => handleClearPatients(null)} className="w-full bg-red-600 text-white py-3 rounded-lg font-bold shadow">清除所有資料</button>
                             </div>
+                            <hr className="border-gray-200" />
+                            <button 
+                                onClick={handleLogout}
+                                className="w-full bg-gray-500 hover:bg-gray-600 text-white py-2 rounded font-bold flex items-center justify-center gap-2"
+                            >
+                                <Lock size={16} /> 登出並鎖定 (Logout)
+                            </button>
                         </div>
                     </Modal>
 
@@ -504,16 +612,43 @@
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.3 智慧警示)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v3.8)</h1>
+                                {isAdmin ? (
+                                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 border border-green-200">
+                                        <Unlock size={12} /> 管理員
+                                    </span>
+                                ) : (
+                                    <span className="bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 border border-gray-300">
+                                        <Lock size={12} /> 訪客模式 (僅供觀看)
+                                    </span>
+                                )}
                             </div>
-                            <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full">
-                                <div className="text-xs font-bold text-gray-500 px-2 whitespace-nowrap flex items-center gap-1"><Settings size={14}/> 開診:</div>
+                            <div className={`flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full ${!isAdmin ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <div className="text-xs font-bold text-gray-500 px-2 whitespace-nowrap flex items-center gap-1"><Settings size={14}/> 開診設定:</div>
                                 {[1, 2, 3, 4, 5, 6, 7].map(num => (
-                                    <button key={num} onClick={() => updateActiveRoomCount(num)} className={`w-8 h-8 rounded-md font-bold text-sm ${activeRoomCount === num ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>{num}</button>
+                                    <button 
+                                        key={num} 
+                                        onClick={() => toggleActiveRoom(num)} 
+                                        className={`w-8 h-8 rounded-md font-bold text-sm transition-all border
+                                            ${activeRoomIds.includes(num)
+                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105' 
+                                                : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                                    >
+                                        {num}
+                                    </button>
                                 ))}
                             </div>
                             <div className="flex items-center gap-3">
-                                <button onClick={() => setIsSettingsOpen(true)} className="flex items-center gap-1 bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-bold border border-gray-300 text-sm"><Settings size={16} /> 交班/管理</button>
+                                <button 
+                                    onClick={handleSettingsClick} 
+                                    className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold border text-sm transition-colors
+                                        ${isAdmin 
+                                            ? 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200' 
+                                            : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
+                                >
+                                    {isAdmin ? <Settings size={16} /> : <Lock size={16} />} 
+                                    {isAdmin ? '交班/管理' : '登入'}
+                                </button>
                                 <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap"><span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>{user ? '連線中' : '...'}</div>
                             </div>
                         </div>
@@ -559,7 +694,8 @@
                                         <div className="h-10 flex items-center justify-center">
                                             <button
                                                 onClick={() => toggleSuspension(room.id)}
-                                                className={`text-[10px] md:text-xs w-full py-1 rounded border shadow-sm transition-all flex items-center justify-center gap-1 font-bold h-full
+                                                disabled={!isAdmin}
+                                                className={`text-[10px] md:text-xs w-full py-1 rounded border shadow-sm transition-all flex items-center justify-center gap-1 font-bold h-full disabled:opacity-50 disabled:cursor-not-allowed
                                                     ${suspensionState === 'ACTIVE' 
                                                         ? 'bg-red-50 border-red-300 text-red-700' 
                                                         : suspensionState === 'EXPIRED'
@@ -605,39 +741,47 @@
                     </div>
 
                     {/* INPUT AREA */}
-                    <div className="bg-white rounded-xl shadow-md p-4 md:p-6 border-l-4 border-indigo-500 mb-6">
-                        <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-indigo-700">
-                            <Plus className="w-5 h-5" />
-                            新病人掛號輸入
-                        </h2>
+                    <div className={`bg-white rounded-xl shadow-md p-4 md:p-6 border-l-4 border-indigo-500 mb-6 transition-opacity ${!isAdmin ? 'opacity-60 pointer-events-none grayscale' : ''}`}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg font-bold flex items-center gap-2 text-indigo-700">
+                                <Plus className="w-5 h-5" />
+                                新病人掛號輸入
+                            </h2>
+                            {!isAdmin && <span className="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded font-bold">🔒 僅供觀看</span>}
+                        </div>
                         
                         <div className="flex flex-col lg:flex-row gap-6 items-start lg:items-end">
                             <div className="flex-1 w-full">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">病歷號 (MRN)</label>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">代碼</label>
                                 <input 
                                     type="text" 
                                     value={inputMrn}
                                     onChange={(e) => setInputMrn(e.target.value)}
-                                    placeholder="輸入病歷號..."
+                                    placeholder={isAdmin ? "輸入代碼..." : "已鎖定"}
+                                    disabled={!isAdmin}
                                     className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-xl font-mono"
                                     onKeyDown={(e) => e.key === 'Enter' && handleAddPatientClick()}
                                 />
                             </div>
 
-                            <div className="w-full lg:w-32">
+                            <div className="w-full lg:w-auto">
                                 <label className="block text-sm font-bold text-gray-700 mb-1">檢傷級數</label>
-                                <select 
-                                    value={inputLevel} 
-                                    onChange={(e) => setInputLevel(e.target.value)}
-                                    className={`w-full p-3 border-2 rounded-lg focus:outline-none font-bold text-lg
-                                        ${parseInt(inputLevel) === 1 ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-300'}`}
-                                >
-                                    <option value="1">L1</option>
-                                    <option value="2">L2</option>
-                                    <option value="3">L3</option>
-                                    <option value="4">L4</option>
-                                    <option value="5">L5</option>
-                                </select>
+                                <div className="flex gap-2">
+                                    {[1, 2, 3, 4, 5].map(level => (
+                                        <button
+                                            key={level}
+                                            onClick={() => setInputLevel(level)}
+                                            disabled={!isAdmin}
+                                            className={`w-12 h-12 rounded-lg font-bold text-xl border-2 transition-all shadow-sm
+                                                ${parseInt(inputLevel) === level
+                                                    ? (level === 1 ? 'bg-red-600 text-white border-red-600 shadow-md transform scale-105' : 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105')
+                                                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                                                }`}
+                                        >
+                                            {level}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             <div className="flex flex-wrap gap-2 md:gap-4 mb-2 lg:mb-3 w-full lg:w-auto">
@@ -646,6 +790,7 @@
                                     <input 
                                         type="checkbox" 
                                         checked={isMajorTrauma} 
+                                        disabled={!isAdmin}
                                         onChange={(e) => setIsMajorTrauma(e.target.checked)}
                                         className="w-5 h-5 accent-red-600"
                                     />
@@ -657,6 +802,7 @@
                                     <input 
                                         type="checkbox" 
                                         checked={isOhca} 
+                                        disabled={!isAdmin}
                                         onChange={(e) => {
                                             setIsOhca(e.target.checked);
                                             if (e.target.checked) setInputLevel(1); 
@@ -667,36 +813,45 @@
                                 </label>
                             </div>
 
-                            <div className="flex items-center gap-4 w-full lg:w-auto">
-                                <div className="flex flex-col w-full lg:w-48">
-                                    <label className="block text-sm font-bold text-gray-700 mb-1 flex items-center gap-1">
-                                        <Stethoscope size={14} /> 指定診間
-                                    </label>
-                                    <div className="relative">
-                                        <select 
-                                            value={targetRoom}
-                                            onChange={(e) => setTargetRoom(e.target.value)}
-                                            className={`w-full p-3 border-2 rounded-lg focus:outline-none font-bold text-lg appearance-none cursor-pointer
-                                                ${parseInt(targetRoom) === suggestedRoomId 
-                                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-900' 
-                                                    : 'border-gray-300 bg-white text-gray-900'}`}
-                                        >
-                                            {activeRooms.map(room => (
-                                                <option key={room.id} value={room.id}>
-                                                    {room.name} {suggestedRoomId === room.id ? '(建議)' : ''}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
-                                            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                                        </div>
-                                    </div>
+                            <div className="flex flex-col w-full">
+                                <label className="block text-sm font-bold text-gray-700 mb-1 flex items-center gap-1">
+                                    <Stethoscope size={14} /> 指定診間
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {activeRooms.map(room => {
+                                        const isSelected = parseInt(targetRoom) === room.id;
+                                        const isSuggested = suggestedRoomId === room.id;
+                                        
+                                        return (
+                                            <button
+                                                key={room.id}
+                                                onClick={() => setTargetRoom(room.id)}
+                                                disabled={!isAdmin}
+                                                className={`px-3 py-2 rounded-lg font-bold text-sm border-2 transition-all shadow-sm flex flex-col items-center justify-center min-w-[60px]
+                                                    ${isSelected
+                                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105'
+                                                        : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                                                    }
+                                                    ${isSuggested && !isSelected ? 'border-indigo-300 bg-indigo-50 text-indigo-900' : ''}
+                                                `}
+                                            >
+                                                <span>{room.name}</span>
+                                                {isSuggested && (
+                                                    <span className={`text-[10px] ${isSelected ? 'text-indigo-200' : 'text-indigo-500'}`}>
+                                                        (建議)
+                                                    </span>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
-                                
+                            </div>
+                            
+                            <div className="w-full flex justify-end">
                                 <button
                                     onClick={handleAddPatientClick}
-                                    disabled={!inputMrn || loading}
-                                    className="h-[52px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-6 rounded-lg font-bold shadow-lg transition-transform active:scale-95 text-lg flex items-center justify-center gap-2 whitespace-nowrap self-end"
+                                    disabled={!inputMrn || loading || !isAdmin}
+                                    className="h-[52px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-6 rounded-lg font-bold shadow-lg transition-transform active:scale-95 text-lg flex items-center justify-center gap-2 whitespace-nowrap"
                                 >
                                     {loading ? <RotateCw className="animate-spin" /> : <><CheckCircle /> 確認</>}
                                 </button>
@@ -717,7 +872,14 @@
                                     <div key={room.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-[300px]">
                                         <div className={`${room.header} text-white font-bold text-center py-1 text-sm flex justify-between px-2 items-center`}>
                                             <span className="flex-1">{room.name}</span>
-                                            <button onClick={() => handleClearPatients(room.id)} className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors" title={`清空${room.name}病人`}><Trash2 size={12} /></button>
+                                            <button 
+                                                onClick={() => handleClearPatients(room.id)} 
+                                                disabled={!isAdmin}
+                                                className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors disabled:opacity-0" 
+                                                title={`清空${room.name}病人`}
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
                                         </div>
                                         <div className="p-2 flex-1 overflow-y-auto max-h-[500px] space-y-2">
                                             {roomPatients.length === 0 && <div className="text-center text-gray-300 py-8 text-sm italic">無病人</div>}
@@ -732,7 +894,14 @@
                                                                 {p.isOhca && <span className="text-[10px] px-1.5 py-0.5 rounded bg-black text-white font-bold">OHCA</span>}
                                                             </div>
                                                         </div>
-                                                        <button onClick={() => handleDeletePatient(p.id)} className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors" title="移除掛號"><Trash2 size={16} /></button>
+                                                        <button 
+                                                            onClick={() => handleDeletePatient(p.id)} 
+                                                            disabled={!isAdmin}
+                                                            className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors disabled:hidden" 
+                                                            title="移除掛號"
+                                                        >
+                                                            <Trash2 size={16} />
+                                                        </button>
                                                     </div>
                                                 </div>
                                             ))}
