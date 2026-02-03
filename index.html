@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v4.0 穩定架構版)</title>
+    <title>急診檢傷分診計數器 (v4.1 正式版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -15,7 +15,6 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- Firebase Compat Scripts (最穩定的載入方式) -->
-    <!-- 使用 10.14.1 版本 -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -42,34 +41,10 @@
         .animate-flash-warning {
             animation: flash-warning 1s infinite;
         }
-
-        /* 診斷面板樣式 */
-        #debug-panel {
-            background: #1e1e1e;
-            color: #00ff00;
-            font-family: 'Courier New', monospace;
-            padding: 10px;
-            font-size: 12px;
-            max-height: 150px;
-            overflow-y: auto;
-            border-bottom: 2px solid #333;
-            display: none; /* 預設隱藏，有錯誤再顯示 */
-        }
-        .debug-error { color: #ff4444; font-weight: bold; border: 1px solid red; padding: 5px; margin: 5px 0; background: #300; }
     </style>
 </head>
 <body class="bg-gray-50">
-    <div id="debug-panel"></div>
     <div id="root"></div>
-
-    <script>
-        // 簡單的錯誤顯示器
-        window.onerror = function(msg, url, line) {
-            const panel = document.getElementById('debug-panel');
-            panel.style.display = 'block';
-            panel.innerHTML += `<div class="debug-error">系統錯誤: ${msg} (Line: ${line})<br>如果看到 'firebase is not defined'，代表 Firebase 載入失敗 (網路或金鑰問題)。</div>`;
-        };
-    </script>
 
     <!-- 注意：這裡移除了 type="module"，改用普通的 text/babel -->
     <script type="text/babel">
@@ -95,11 +70,9 @@
             app = firebase.initializeApp(firebaseConfig);
             auth = firebase.auth();
             db = firebase.firestore();
-            console.log("Firebase initialized successfully");
         } catch (e) {
             console.error("Init Error", e);
-            document.getElementById('debug-panel').style.display = 'block';
-            document.getElementById('debug-panel').innerHTML += `<div class="debug-error">Firebase 初始化失敗: ${e.message}<br>請檢查網路連線或 API Key 設定。</div>`;
+            alert("Firebase 初始化失敗，請檢查網路連線。");
         }
 
         const PATIENTS_COLLECTION = 'er_triage_patients';
@@ -230,12 +203,6 @@
                         }
                     } catch (e) {
                         console.error("Auth error", e);
-                        // 如果是 API Key 問題，這裡會捕捉到
-                        const panel = document.getElementById('debug-panel');
-                        if(panel) {
-                            panel.style.display = 'block';
-                            panel.innerHTML += `<div class="debug-error">登入錯誤: ${e.message}<br>如果顯示 API Key 問題，請至 Google Cloud Console 解鎖。</div>`;
-                        }
                     }
                 };
                 initAuth();
@@ -658,7 +625,7 @@
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v4.0)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v4.1)</h1>
                                 {isAdmin ? (
                                     <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 border border-green-200">
                                         <Unlock size={12} /> 管理員
