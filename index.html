@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v3.8 密碼保護版)</title>
+    <title>急診檢傷分診計數器 (v3.9 修復版)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -14,6 +14,25 @@
     <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
+    <!-- 錯誤攔截器 (Error Catcher) - 防止白屏無法除錯 -->
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            const errorBox = document.getElementById('error-box');
+            if (errorBox) {
+                errorBox.style.display = 'block';
+                errorBox.innerHTML += `<div><strong>Error:</strong> ${message} <br/><small>at ${source}:${lineno}</small></div><hr/>`;
+            }
+        };
+        // 攔截未被捕獲的 Promise 錯誤 (如 Import 失敗)
+        window.addEventListener('unhandledrejection', function(event) {
+            const errorBox = document.getElementById('error-box');
+            if (errorBox) {
+                errorBox.style.display = 'block';
+                errorBox.innerHTML += `<div><strong>Loader Error:</strong> ${event.reason} <br/><small>可能是 Firebase 版本連結失效，請檢查網路或 CDN。</small></div><hr/>`;
+            }
+        });
+    </script>
+
     <style>
         /* Custom scrollbar for better look */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -38,23 +57,41 @@
         .animate-flash-warning {
             animation: flash-warning 1s infinite;
         }
+
+        #error-box {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: #fee2e2;
+            border-bottom: 2px solid #ef4444;
+            color: #991b1b;
+            padding: 20px;
+            z-index: 9999;
+            font-family: monospace;
+            max-height: 50vh;
+            overflow: auto;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
+    <!-- 錯誤顯示區 -->
+    <div id="error-box"></div>
+    
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
         const { useState, useEffect, useMemo, useRef } = React;
         const { createRoot } = ReactDOM;
 
-        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        // --- 修正重點：使用穩定的 10.14.1 版本 ---
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
         import { 
             getFirestore, collection, doc, setDoc, onSnapshot, 
             updateDoc, deleteDoc, serverTimestamp, query, orderBy, runTransaction, writeBatch, where, getDocs
-        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
         import { 
-            getAuth, signInAnonymously, onAuthStateChanged 
-        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+            getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken 
+        } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 
         // --- Icons ---
         const Activity = ({ className, size }) => (
@@ -192,7 +229,11 @@
             useEffect(() => {
                 const initAuth = async () => {
                     try {
-                        await signInAnonymously(auth);
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
                     } catch (e) {
                         console.error("Auth error", e);
                     }
