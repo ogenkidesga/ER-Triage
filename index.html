@@ -3,24 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>急診檢傷分診計數器 (v4.1 正式版)</title>
-    <!-- Tailwind CSS -->
+    <title>急診檢傷分診計數器 (v4.2)</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    
-    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <!-- Firebase Compat Scripts (最穩定的載入方式) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
     
     <style>
-        /* Custom scrollbar for better look */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
@@ -30,23 +22,30 @@
             0%, 100% { color: #dc2626; }
             50% { color: #991b1b; }
         }
-        .countdown-text {
-            animation: pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
+        .countdown-text { animation: pulse-red 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 
         @keyframes flash-warning {
             0%, 100% { background-color: #fee2e2; border-color: #ef4444; }
             50% { background-color: #fca5a5; border-color: #b91c1c; }
         }
-        .animate-flash-warning {
-            animation: flash-warning 1s infinite;
+        .animate-flash-warning { animation: flash-warning 1s infinite; }
+
+        /* 新病人通知動畫 */
+        @keyframes new-patient-flash {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+            50% { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0.4); }
         }
+        @keyframes critical-flash {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); background-color: transparent; }
+            50% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0.5); background-color: rgba(220, 38, 38, 0.05); }
+        }
+        .animate-new-patient { animation: new-patient-flash 0.8s ease-out 3; }
+        .animate-critical { animation: critical-flash 0.5s ease-out 6; }
     </style>
 </head>
 <body class="bg-gray-50">
     <div id="root"></div>
 
-    <!-- 注意：這裡移除了 type="module"，改用普通的 text/babel -->
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
         const { createRoot } = ReactDOM;
@@ -61,12 +60,9 @@
             appId: "1:691660481020:web:8c06b22c69320cbce81279"
         };
 
-        // --- Firebase Init (Compat Mode) ---
         let app, auth, db;
         try {
-            if (!window.firebase) {
-                throw new Error("Firebase library not loaded!");
-            }
+            if (!window.firebase) throw new Error("Firebase library not loaded!");
             app = firebase.initializeApp(firebaseConfig);
             auth = firebase.auth();
             db = firebase.firestore();
@@ -81,77 +77,130 @@
 
         // --- Icons ---
         const Activity = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         );
         const PauseCircle = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><line x1="10" y1="15" x2="10" y2="9"></line><line x1="14" y1="15" x2="14" y2="9"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><line x1="10" y1="15" x2="10" y2="9"></line><line x1="14" y1="15" x2="14" y2="9"></line></svg>
         );
         const RotateCw = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
         );
         const Trash2 = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
         );
         const Plus = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         );
         const CheckCircle = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
         );
         const Settings = ({ className, size }) => (
-             <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
         );
         const Stethoscope = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4.8 2.3A.3.3 0 1 0 5.2.7l-1.5 2.5 1.1-.9z"></path><path d="M6 5a6 6 0 0 1 12 0v3"></path><path d="M11 17h2"></path><path d="M8 17a4 4 0 0 1 8 0v-4a2 2 0 1 0-4 0v2"></path><circle cx="12" cy="19" r="2"></circle></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4.8 2.3A.3.3 0 1 0 5.2.7l-1.5 2.5 1.1-.9z"></path><path d="M6 5a6 6 0 0 1 12 0v3"></path><path d="M11 17h2"></path><path d="M8 17a4 4 0 0 1 8 0v-4a2 2 0 1 0-4 0v2"></path><circle cx="12" cy="19" r="2"></circle></svg>
         );
         const XCircle = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
         );
         const RefreshCw = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
         );
         const AlertTriangle = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
         );
         const Lock = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
         );
         const Unlock = ({ className, size }) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>
+        );
+        const Bell = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+        );
+        const BellOff = ({ className, size }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size||24} height={size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M13.73 21a2 2 0 0 1-3.46 0"></path><path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path><path d="M18 8a6 6 0 0 0-9.33-5"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
         );
 
         // --- Constants ---
         const ROOM_DEFINITIONS = [
-            { id: 1, name: '診一', color: 'bg-yellow-200', header: 'bg-yellow-400', border: 'border-yellow-400', text: 'text-yellow-900' },
-            { id: 2, name: '診二', color: 'bg-green-200', header: 'bg-green-500', border: 'border-green-500', text: 'text-green-900' },
-            { id: 3, name: '診三', color: 'bg-blue-200', header: 'bg-blue-400', border: 'border-blue-400', text: 'text-blue-900' },
-            { id: 4, name: '診四', color: 'bg-orange-200', header: 'bg-orange-400', border: 'border-orange-400', text: 'text-orange-900' },
-            { id: 5, name: '診五', color: 'bg-pink-200', header: 'bg-pink-400', border: 'border-pink-400', text: 'text-pink-900' },
-            { id: 6, name: '診六', color: 'bg-purple-200', header: 'bg-purple-400', border: 'border-purple-400', text: 'text-purple-900' },
-            { id: 7, name: '診七', color: 'bg-teal-200', header: 'bg-teal-400', border: 'border-teal-400', text: 'text-teal-900' },
+            { id: 1, name: '診一', color: 'bg-yellow-200', header: 'bg-yellow-400', border: 'border-yellow-400', text: 'text-yellow-900', btnActive: 'bg-yellow-400 text-white border-yellow-500', btnHover: 'hover:bg-yellow-50 hover:border-yellow-300' },
+            { id: 2, name: '診二', color: 'bg-green-200', header: 'bg-green-500', border: 'border-green-500', text: 'text-green-900', btnActive: 'bg-green-500 text-white border-green-600', btnHover: 'hover:bg-green-50 hover:border-green-300' },
+            { id: 3, name: '診三', color: 'bg-blue-200', header: 'bg-blue-400', border: 'border-blue-400', text: 'text-blue-900', btnActive: 'bg-blue-400 text-white border-blue-500', btnHover: 'hover:bg-blue-50 hover:border-blue-300' },
+            { id: 4, name: '診四', color: 'bg-orange-200', header: 'bg-orange-400', border: 'border-orange-400', text: 'text-orange-900', btnActive: 'bg-orange-400 text-white border-orange-500', btnHover: 'hover:bg-orange-50 hover:border-orange-300' },
+            { id: 5, name: '診五', color: 'bg-pink-200', header: 'bg-pink-400', border: 'border-pink-400', text: 'text-pink-900', btnActive: 'bg-pink-400 text-white border-pink-500', btnHover: 'hover:bg-pink-50 hover:border-pink-300' },
+            { id: 6, name: '診六', color: 'bg-purple-200', header: 'bg-purple-400', border: 'border-purple-400', text: 'text-purple-900', btnActive: 'bg-purple-400 text-white border-purple-500', btnHover: 'hover:bg-purple-50 hover:border-purple-300' },
+            { id: 7, name: '診七', color: 'bg-teal-200', header: 'bg-teal-400', border: 'border-teal-400', text: 'text-teal-900', btnActive: 'bg-teal-400 text-white border-teal-500', btnHover: 'hover:bg-teal-50 hover:border-teal-300' },
         ];
 
         const INITIAL_STATE = {
-            activeRoomIds: [1, 2, 3, 4], 
-            activeRoomCount: 4, 
-            rotation: {
-                level1_next: 1,
-                others_next: 1,
-                level1_last: 0, 
-                others_last: 0 
-            },
+            activeRoomIds: [1, 2, 3, 4],
+            activeRoomCount: 4,
+            rotation: { level1_next: 1, others_next: 1, level1_last: 0, others_last: 0 },
             suspensions: {}
         };
 
         const SUSPENSION_DURATION_MS = 30 * 60 * 1000;
         const ADMIN_PASSWORD = "5323911@";
+        const MY_ROOM_STORAGE_KEY = 'er_triage_my_room';
 
-        // --- Modal Components ---
+        // --- Sound Functions ---
+        // 普通新病人：輕快叮咚雙音
+        const playNewPatientSound = () => {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const playTone = (freq, startOffset, duration, volume = 0.45) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
+                    gain.gain.setValueAtTime(0, ctx.currentTime + startOffset);
+                    gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + startOffset + 0.01);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startOffset + duration);
+                    osc.start(ctx.currentTime + startOffset);
+                    osc.stop(ctx.currentTime + startOffset + duration + 0.05);
+                };
+                playTone(880, 0, 0.25);      // 第一音 La
+                playTone(1320, 0.22, 0.35);  // 第二音 Mi（高）
+            } catch (e) {
+                console.warn('Sound playback failed:', e);
+            }
+        };
+
+        // OHCA / MT：急促三連嗶警示音
+        const playCriticalAlertSound = () => {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const playBeep = (startOffset) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'square';
+                    osc.frequency.setValueAtTime(1200, ctx.currentTime + startOffset);
+                    gain.gain.setValueAtTime(0, ctx.currentTime + startOffset);
+                    gain.gain.linearRampToValueAtTime(0.35, ctx.currentTime + startOffset + 0.01);
+                    gain.gain.setValueAtTime(0.35, ctx.currentTime + startOffset + 0.18);
+                    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + startOffset + 0.22);
+                    osc.start(ctx.currentTime + startOffset);
+                    osc.stop(ctx.currentTime + startOffset + 0.25);
+                };
+                playBeep(0);
+                playBeep(0.28);
+                playBeep(0.56);
+            } catch (e) {
+                console.warn('Sound playback failed:', e);
+            }
+        };
+
+        // --- Modal Component ---
         const Modal = ({ isOpen, onClose, title, children, showClose = true }) => {
             if (!isOpen) return null;
             return (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
                         <div className="flex justify-between items-center p-4 border-b bg-gray-50">
                             <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">{title}</h3>
                             {showClose && (
@@ -160,9 +209,7 @@
                                 </button>
                             )}
                         </div>
-                        <div className="p-6">
-                            {children}
-                        </div>
+                        <div className="p-6">{children}</div>
                     </div>
                 </div>
             );
@@ -172,28 +219,37 @@
             const [user, setUser] = useState(null);
             const [patients, setPatients] = useState([]);
             const [systemState, setSystemState] = useState(INITIAL_STATE);
-            
+
             const [inputMrn, setInputMrn] = useState('');
             const [inputLevel, setInputLevel] = useState(3);
             const [isMajorTrauma, setIsMajorTrauma] = useState(false);
             const [isOhca, setIsOhca] = useState(false);
             const [loading, setLoading] = useState(false);
             const [, setTick] = useState(0);
-            
+
             const [targetRoom, setTargetRoom] = useState(1);
             const [isSettingsOpen, setIsSettingsOpen] = useState(false);
             const [adminLoading, setAdminLoading] = useState(false);
-
             const [criticalConfirmData, setCriticalConfirmData] = useState(null);
 
             const [isAdmin, setIsAdmin] = useState(false);
             const [showAuthModal, setShowAuthModal] = useState(false);
             const [passwordInput, setPasswordInput] = useState('');
 
-            // --- Auth & Data Fetching (使用 compat 語法) ---
+            // === 聲音提醒相關 state ===
+            // myRoomId: null = 不監聽, number = 監聽該診間
+            const [myRoomId, setMyRoomId] = useState(() => {
+                const saved = localStorage.getItem(MY_ROOM_STORAGE_KEY);
+                return saved ? parseInt(saved) : null;
+            });
+            // 記錄上一次病人 ID 集合，用來比對新病人
+            const prevPatientIdsRef = useRef(null);
+            // 觸發閃爍動畫的診間 id
+            const [flashingRoomId, setFlashingRoomId] = useState(null);
+
+            // --- Auth & Init ---
             useEffect(() => {
                 if (!auth) return;
-
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -201,29 +257,18 @@
                         } else {
                             await auth.signInAnonymously();
                         }
-                    } catch (e) {
-                        console.error("Auth error", e);
-                    }
+                    } catch (e) { console.error("Auth error", e); }
                 };
                 initAuth();
-                
                 const storedAuth = localStorage.getItem('er_triage_auth');
-                if (storedAuth === ADMIN_PASSWORD) {
-                    setIsAdmin(true);
-                }
-
+                if (storedAuth === ADMIN_PASSWORD) setIsAdmin(true);
                 const unsubscribe = auth.onAuthStateChanged(setUser);
                 const timer = setInterval(() => setTick(t => t + 1), 1000);
-                return () => {
-                    unsubscribe();
-                    clearInterval(timer);
-                };
+                return () => { unsubscribe(); clearInterval(timer); };
             }, []);
 
             useEffect(() => {
                 if (!user || !db) return;
-
-                // 使用 Compat 語法: db.collection()
                 const unsubPatients = db.collection(PATIENTS_COLLECTION)
                     .orderBy('timestamp', 'desc')
                     .onSnapshot((snapshot) => {
@@ -233,18 +278,62 @@
 
                 const docRef = db.collection(STATE_COLLECTION).doc(STATE_DOC_ID);
                 const unsubState = docRef.onSnapshot((docSnap) => {
-                    if (docSnap.exists) {
-                        setSystemState(docSnap.data());
-                    } else {
-                        docRef.set(INITIAL_STATE);
-                    }
+                    if (docSnap.exists) setSystemState(docSnap.data());
+                    else docRef.set(INITIAL_STATE);
                 }, (error) => console.error("State fetch error:", error));
 
-                return () => {
-                    unsubPatients();
-                    unsubState();
-                };
+                return () => { unsubPatients(); unsubState(); };
             }, [user]);
+
+            // === 偵測新病人，觸發聲音與閃爍 ===
+            useEffect(() => {
+                if (patients.length === 0) return;
+
+                // 第一次載入：只建立基準，不播聲音
+                if (prevPatientIdsRef.current === null) {
+                    prevPatientIdsRef.current = new Set(patients.map(p => p.id));
+                    return;
+                }
+
+                // 找出新進來的病人
+                const newPatients = patients.filter(p => !prevPatientIdsRef.current.has(p.id));
+                prevPatientIdsRef.current = new Set(patients.map(p => p.id));
+
+                if (newPatients.length === 0) return;
+
+                // 管理員（檢傷端）不播音
+                if (isAdmin) return;
+
+                // 過濾出屬於「我的診間」的新病人
+                if (myRoomId === null) return;
+
+                const myNewPatients = newPatients.filter(p => p.roomId === myRoomId);
+                if (myNewPatients.length === 0) return;
+
+                const hasCritical = myNewPatients.some(p => p.isOhca || p.isMajorTrauma);
+
+                // 播放聲音
+                if (hasCritical) {
+                    playCriticalAlertSound();
+                } else {
+                    playNewPatientSound();
+                }
+
+                // 觸發診間欄位閃爍動畫（持續後清除）
+                setFlashingRoomId({ id: myRoomId, critical: hasCritical });
+                setTimeout(() => setFlashingRoomId(null), hasCritical ? 3200 : 2600);
+
+            }, [patients, isAdmin, myRoomId]);
+
+            // 儲存我的診間到 localStorage
+            const handleSetMyRoom = (roomId) => {
+                setMyRoomId(roomId);
+                if (roomId === null) {
+                    localStorage.removeItem(MY_ROOM_STORAGE_KEY);
+                } else {
+                    localStorage.setItem(MY_ROOM_STORAGE_KEY, String(roomId));
+                }
+            };
 
             // --- Logic Helpers ---
             const activeRoomIds = useMemo(() => {
@@ -261,46 +350,34 @@
 
             const getNextIdFromLast = (lastRoomId, idsList) => {
                 if (!idsList || idsList.length === 0) return 1;
-                const sorted = [...idsList].sort((a,b)=>a-b);
+                const sorted = [...idsList].sort((a,b) => a-b);
                 const nextGreater = sorted.find(id => id > lastRoomId);
                 return nextGreater || sorted[0];
             };
 
             const getRoomSuspensionState = (roomId) => {
                 const suspendedUntil = systemState.suspensions?.[roomId];
-                if (!suspendedUntil) return 'NONE'; 
-                if (suspendedUntil > Date.now()) return 'ACTIVE'; 
-                return 'EXPIRED'; 
+                if (!suspendedUntil) return 'NONE';
+                if (suspendedUntil > Date.now()) return 'ACTIVE';
+                return 'EXPIRED';
             };
 
-            const isRoomActiveSuspension = (roomId) => {
-                return getRoomSuspensionState(roomId) === 'ACTIVE';
-            };
-            
-            const isRoomSkippable = (roomId) => {
-                return isRoomActiveSuspension(roomId);
-            };
+            const isRoomSkippable = (roomId) => getRoomSuspensionState(roomId) === 'ACTIVE';
 
-            const getRotationType = (level) => {
-                return parseInt(level) === 1 ? 'level1' : 'others';
-            };
+            const getRotationType = (level) => parseInt(level) === 1 ? 'level1' : 'others';
 
             const calculateNextRoom = (level) => {
                 const type = getRotationType(level);
                 const lastKey = type + '_last';
                 const nextKey = type + '_next';
                 const lastRoomId = systemState.rotation?.[lastKey];
-                
                 let pointer;
                 if (lastRoomId !== undefined && lastRoomId !== 0) {
                     pointer = getNextIdFromLast(lastRoomId, activeRoomIds);
                 } else {
                     pointer = systemState.rotation?.[nextKey] || 1;
-                    if (!activeRoomIds.includes(pointer)) {
-                        pointer = activeRoomIds[0] || 1;
-                    }
+                    if (!activeRoomIds.includes(pointer)) pointer = activeRoomIds[0] || 1;
                 }
-
                 let attempts = 0;
                 while (isRoomSkippable(pointer) && attempts < activeRoomIds.length) {
                     pointer = getNextIdFromLast(pointer, activeRoomIds);
@@ -309,19 +386,13 @@
                 return pointer;
             };
 
-            const suggestedRoomId = useMemo(() => {
-                return calculateNextRoom(inputLevel);
-            }, [inputLevel, systemState, activeRoomIds]);
+            const suggestedRoomId = useMemo(() => calculateNextRoom(inputLevel), [inputLevel, systemState, activeRoomIds]);
 
-            useEffect(() => {
-                setTargetRoom(suggestedRoomId);
-            }, [suggestedRoomId]);
+            useEffect(() => { setTargetRoom(suggestedRoomId); }, [suggestedRoomId]);
 
             const stats = useMemo(() => {
                 const initialStats = {};
-                ROOM_DEFINITIONS.forEach(r => {
-                    initialStats[r.id] = { level1: 0, others: 0, mt: 0, ohca: 0 };
-                });
+                ROOM_DEFINITIONS.forEach(r => { initialStats[r.id] = { level1: 0, others: 0, mt: 0, ohca: 0 }; });
                 patients.forEach(p => {
                     if (initialStats[p.roomId]) {
                         if (p.level === 1) initialStats[p.roomId].level1++;
@@ -355,16 +426,13 @@
             };
 
             const handleSettingsClick = () => {
-                if (!isAdmin) {
-                    setShowAuthModal(true);
-                } else {
-                    setIsSettingsOpen(true);
-                }
+                if (!isAdmin) setShowAuthModal(true);
+                else setIsSettingsOpen(true);
             };
 
-            // --- Actions ---
+            // --- Patient Actions ---
             const toggleActiveRoom = async (roomId) => {
-                if (!isAdmin) return; 
+                if (!isAdmin) return;
                 const stateRef = db.collection(STATE_COLLECTION).doc(STATE_DOC_ID);
                 let newIds = [...activeRoomIds];
                 if (newIds.includes(roomId)) {
@@ -378,37 +446,34 @@
             };
 
             const handleAddPatientClick = () => {
-                if (!isAdmin) return; 
+                if (!isAdmin) return;
                 if (!inputMrn.trim()) return;
                 if (isOhca || isMajorTrauma) {
                     setCriticalConfirmData({
                         targetRoomName: ROOM_DEFINITIONS.find(r => r.id === parseInt(targetRoom))?.name || `診${targetRoom}`
                     });
-                    return; 
+                    return;
                 }
                 performAddPatient(false);
             };
 
             const performAddPatient = async (shouldSuspendRoom) => {
-                if (!user || !isAdmin) return; 
+                if (!user || !isAdmin) return;
                 setLoading(true);
-                setCriticalConfirmData(null); 
-
+                setCriticalConfirmData(null);
                 try {
                     const assignedRoomId = parseInt(targetRoom);
                     const type = getRotationType(inputLevel);
                     const nextKey = type + '_next';
                     const lastKey = type + '_last';
-                    
                     const newPatient = {
                         mrn: inputMrn.trim(),
                         level: parseInt(inputLevel),
                         isMajorTrauma,
                         isOhca,
                         roomId: assignedRoomId,
-                        timestamp: Date.now() 
+                        timestamp: Date.now()
                     };
-
                     await db.runTransaction(async (transaction) => {
                         const stateRef = db.collection(STATE_COLLECTION).doc(STATE_DOC_ID);
                         const stateDoc = await transaction.get(stateRef);
@@ -416,31 +481,21 @@
                         let currentRotation = currentState.rotation || INITIAL_STATE.rotation;
                         let currentActiveIds = [];
                         if (currentState.activeRoomIds && Array.isArray(currentState.activeRoomIds)) {
-                            currentActiveIds = currentState.activeRoomIds.sort((a,b)=>a-b);
+                            currentActiveIds = currentState.activeRoomIds.sort((a,b) => a-b);
                         } else {
                             const c = currentState.activeRoomCount || 4;
                             currentActiveIds = Array.from({length: c}, (_, i) => i + 1);
                         }
                         const currIdx = currentActiveIds.indexOf(assignedRoomId);
-                        let nextPointerLegacy;
-                        if (currIdx === -1) {
-                            nextPointerLegacy = currentActiveIds[0];
-                        } else {
-                            nextPointerLegacy = currentActiveIds[(currIdx + 1) % currentActiveIds.length];
-                        }
-                        const newRotation = {
-                            ...currentRotation,
-                            [nextKey]: nextPointerLegacy,
-                            [lastKey]: assignedRoomId
-                        };
-                        
+                        let nextPointerLegacy = currIdx === -1
+                            ? currentActiveIds[0]
+                            : currentActiveIds[(currIdx + 1) % currentActiveIds.length];
+                        const newRotation = { ...currentRotation, [nextKey]: nextPointerLegacy, [lastKey]: assignedRoomId };
                         const newPatientRef = db.collection(PATIENTS_COLLECTION).doc();
                         transaction.set(newPatientRef, newPatient);
-                        
                         let updatePayload = { rotation: newRotation };
                         if (shouldSuspendRoom) {
-                            const newSuspensionTime = Date.now() + SUSPENSION_DURATION_MS;
-                            updatePayload[`suspensions.${assignedRoomId}`] = newSuspensionTime;
+                            updatePayload[`suspensions.${assignedRoomId}`] = Date.now() + SUSPENSION_DURATION_MS;
                         }
                         transaction.set(stateRef, updatePayload, { merge: true });
                     });
@@ -456,41 +511,33 @@
             };
 
             const toggleSuspension = async (roomId) => {
-                if (!isAdmin) return; 
+                if (!isAdmin) return;
                 const state = getRoomSuspensionState(roomId);
-                const shouldSuspend = state === 'NONE';
-                const newState = shouldSuspend ? Date.now() + SUSPENSION_DURATION_MS : null;
+                const newState = state === 'NONE' ? Date.now() + SUSPENSION_DURATION_MS : null;
                 const stateRef = db.collection(STATE_COLLECTION).doc(STATE_DOC_ID);
                 await stateRef.update({ [`suspensions.${roomId}`]: newState || 0 });
             };
 
             const handleResetRotation = async (mode) => {
-                if (!isAdmin) return; 
+                if (!isAdmin) return;
                 if (!window.confirm("確定重置輪序?")) return;
                 setAdminLoading(true);
                 try {
                     const updateData = {};
-                    if (mode === 'all' || mode === 'level1') {
-                        updateData['rotation.level1_next'] = 1;
-                        updateData['rotation.level1_last'] = 0; 
-                    }
-                    if (mode === 'all' || mode === 'others') {
-                        updateData['rotation.others_next'] = 1;
-                        updateData['rotation.others_last'] = 0;
-                    }
+                    if (mode === 'all' || mode === 'level1') { updateData['rotation.level1_next'] = 1; updateData['rotation.level1_last'] = 0; }
+                    if (mode === 'all' || mode === 'others') { updateData['rotation.others_next'] = 1; updateData['rotation.others_last'] = 0; }
                     await db.collection(STATE_COLLECTION).doc(STATE_DOC_ID).update(updateData);
                 } catch (e) { alert(e.message); }
                 finally { setAdminLoading(false); }
             };
 
             const handleClearPatients = async (roomId) => {
-                if (!isAdmin) return; 
+                if (!isAdmin) return;
                 if (!window.confirm("確定清空病人資料?")) return;
                 setAdminLoading(true);
                 try {
                     let ref = db.collection(PATIENTS_COLLECTION);
                     let q = roomId ? ref.where("roomId", "==", roomId) : ref;
-                    
                     const snapshot = await q.get();
                     const batch = db.batch();
                     snapshot.docs.forEach(d => batch.delete(d.ref));
@@ -500,8 +547,8 @@
             };
 
             const handleDeletePatient = async (id) => {
-                if (!isAdmin) return; 
-                if (window.confirm && !window.confirm('確定要移除此病歷號嗎？')) return; 
+                if (!isAdmin) return;
+                if (window.confirm && !window.confirm('確定要移除此病歷號嗎？')) return;
                 try { await db.collection(PATIENTS_COLLECTION).doc(id).delete(); } catch (e) {}
             };
 
@@ -509,11 +556,10 @@
             const getFormatRemainingTime = (timestamp) => {
                 if (!timestamp) return '';
                 const diff = timestamp - Date.now();
-                if (diff <= 0) return '00分00秒'; 
+                if (diff <= 0) return '00分00秒';
                 const m = Math.floor(diff / 60000);
                 const s = Math.floor((diff % 60000) / 1000);
-                const ss = s < 10 ? `0${s}` : s;
-                return `${m}分${ss}秒`;
+                return `${m}分${s < 10 ? '0' : ''}${s}秒`;
             };
 
             const gridStyle = {
@@ -522,19 +568,18 @@
                 gap: '0.5rem'
             };
 
+            // 找到目前 myRoomId 對應的 room 定義
+            const myRoomDef = myRoomId ? ROOM_DEFINITIONS.find(r => r.id === myRoomId) : null;
+
             return (
                 <div className="min-h-screen bg-gray-50 text-gray-800 font-sans p-2 md:p-4">
-                    
+
                     {/* AUTH MODAL */}
-                    <Modal 
-                        isOpen={showAuthModal} 
-                        onClose={() => setShowAuthModal(false)}
-                        title="🔒 管理員登入"
-                    >
+                    <Modal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} title="🔒 管理員登入">
                         <div className="space-y-4">
                             <p className="text-gray-600">請輸入管理密碼以解鎖儀表板控制權：</p>
-                            <input 
-                                type="password" 
+                            <input
+                                type="password"
                                 value={passwordInput}
                                 onChange={(e) => setPasswordInput(e.target.value)}
                                 className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 text-xl font-mono text-center"
@@ -542,46 +587,28 @@
                                 autoFocus
                                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                             />
-                            <button 
-                                onClick={handleLogin}
-                                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow"
-                            >
+                            <button onClick={handleLogin} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow">
                                 登入解鎖
                             </button>
                         </div>
                     </Modal>
 
                     {/* CRITICAL PATIENT MODAL */}
-                    <Modal 
-                        isOpen={!!criticalConfirmData} 
-                        onClose={() => setCriticalConfirmData(null)}
-                        title={<><AlertTriangle className="text-red-600" /> 重症病人確認</>}
-                        showClose={false}
-                    >
-                         <div className="text-center space-y-4">
+                    <Modal isOpen={!!criticalConfirmData} onClose={() => setCriticalConfirmData(null)} title={<><AlertTriangle className="text-red-600" /> 重症病人確認</>} showClose={false}>
+                        <div className="text-center space-y-4">
                             <p className="text-lg font-bold text-gray-800">
-                                您正在將 <span className="text-red-600">OHCA/Trauma</span> 病人<br/>掛入 
+                                您正在將 <span className="text-red-600">OHCA/Trauma</span> 病人<br/>掛入
                                 <span className="text-indigo-600 text-2xl mx-2">{criticalConfirmData?.targetRoomName}</span>
                             </p>
                             <p className="text-gray-600">是否要同步將該診間設為<br/><span className="font-bold text-gray-800">停診 30 分鐘</span> 以進行急救？</p>
-                            
                             <div className="flex flex-col gap-3 mt-4">
-                                <button 
-                                    onClick={() => performAddPatient(true)}
-                                    className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold shadow text-lg flex items-center justify-center gap-2"
-                                >
+                                <button onClick={() => performAddPatient(true)} className="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-bold shadow text-lg flex items-center justify-center gap-2">
                                     <PauseCircle size={20} /> 是，掛號並停診
                                 </button>
-                                <button 
-                                    onClick={() => performAddPatient(false)}
-                                    className="w-full bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-bold shadow text-lg"
-                                >
+                                <button onClick={() => performAddPatient(false)} className="w-full bg-gray-600 hover:bg-gray-700 text-white py-3 rounded-lg font-bold shadow text-lg">
                                     否，僅掛號
                                 </button>
-                                <button 
-                                    onClick={() => setCriticalConfirmData(null)}
-                                    className="w-full bg-white border-2 border-gray-300 text-gray-600 py-2 rounded-lg font-bold hover:bg-gray-50"
-                                >
+                                <button onClick={() => setCriticalConfirmData(null)} className="w-full bg-white border-2 border-gray-300 text-gray-600 py-2 rounded-lg font-bold hover:bg-gray-50">
                                     取消
                                 </button>
                             </div>
@@ -589,16 +616,10 @@
                     </Modal>
 
                     {/* ADMIN SETTINGS MODAL */}
-                    <Modal 
-                        isOpen={isSettingsOpen} 
-                        onClose={() => setIsSettingsOpen(false)}
-                        title="⚙️ 交班與系統管理"
-                    >
+                    <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="⚙️ 交班與系統管理">
                         <div className="space-y-6">
                             <div>
-                                <h4 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
-                                    <RefreshCw size={18} /> 輪序重置
-                                </h4>
+                                <h4 className="font-bold text-gray-700 mb-2 flex items-center gap-2"><RefreshCw size={18} /> 輪序重置</h4>
                                 <div className="grid grid-cols-2 gap-2 mb-2">
                                     <button disabled={adminLoading} onClick={() => handleResetRotation('level1')} className="bg-blue-100 text-blue-800 py-2 rounded font-bold">L1 重置</button>
                                     <button disabled={adminLoading} onClick={() => handleResetRotation('others')} className="bg-green-100 text-green-800 py-2 rounded font-bold">其他重置</button>
@@ -611,40 +632,37 @@
                                 <button disabled={adminLoading} onClick={() => handleClearPatients(null)} className="w-full bg-red-600 text-white py-3 rounded-lg font-bold shadow">清除所有資料</button>
                             </div>
                             <hr className="border-gray-200" />
-                            <button 
-                                onClick={handleLogout}
-                                className="w-full bg-gray-500 hover:bg-gray-600 text-white py-2 rounded font-bold flex items-center justify-center gap-2"
-                            >
+                            <button onClick={handleLogout} className="w-full bg-gray-500 hover:bg-gray-600 text-white py-2 rounded font-bold flex items-center justify-center gap-2">
                                 <Lock size={16} /> 登出並鎖定 (Logout)
                             </button>
                         </div>
                     </Modal>
 
                     {/* HEADER */}
-                    <header className="mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                    <header className="mb-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
                         <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                             <div className="flex items-center gap-3">
                                 <Activity className="text-red-600 w-8 h-8" />
-                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v4.1)</h1>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-800">急診檢傷分流計數器 (v4.2)</h1>
                                 {isAdmin ? (
                                     <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 border border-green-200">
                                         <Unlock size={12} /> 管理員
                                     </span>
                                 ) : (
                                     <span className="bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 border border-gray-300">
-                                        <Lock size={12} /> 訪客模式 (僅供觀看)
+                                        <Lock size={12} /> 訪客模式
                                     </span>
                                 )}
                             </div>
                             <div className={`flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200 overflow-x-auto max-w-full ${!isAdmin ? 'opacity-50 pointer-events-none' : ''}`}>
                                 <div className="text-xs font-bold text-gray-500 px-2 whitespace-nowrap flex items-center gap-1"><Settings size={14}/> 開診設定:</div>
                                 {[1, 2, 3, 4, 5, 6, 7].map(num => (
-                                    <button 
-                                        key={num} 
-                                        onClick={() => toggleActiveRoom(num)} 
+                                    <button
+                                        key={num}
+                                        onClick={() => toggleActiveRoom(num)}
                                         className={`w-8 h-8 rounded-md font-bold text-sm transition-all border
                                             ${activeRoomIds.includes(num)
-                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105' 
+                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105'
                                                 : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
                                     >
                                         {num}
@@ -652,20 +670,90 @@
                                 ))}
                             </div>
                             <div className="flex items-center gap-3">
-                                <button 
-                                    onClick={handleSettingsClick} 
+                                <button
+                                    onClick={handleSettingsClick}
                                     className={`flex items-center gap-1 px-3 py-2 rounded-lg font-bold border text-sm transition-colors
-                                        ${isAdmin 
-                                            ? 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200' 
+                                        ${isAdmin
+                                            ? 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200'
                                             : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'}`}
                                 >
-                                    {isAdmin ? <Settings size={16} /> : <Lock size={16} />} 
+                                    {isAdmin ? <Settings size={16} /> : <Lock size={16} />}
                                     {isAdmin ? '交班/管理' : '登入'}
                                 </button>
-                                <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap"><span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>{user ? '連線中' : '...'}</div>
+                                <div className="text-sm text-gray-500 flex items-center gap-2 whitespace-nowrap">
+                                    <span className={`w-2.5 h-2.5 rounded-full ${user ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                                    {user ? '連線中' : '...'}
+                                </div>
                             </div>
                         </div>
                     </header>
+
+                    {/* ===== 聲音提醒設定區（訪客模式才顯示） ===== */}
+                    {!isAdmin && (
+                        <div className={`mb-4 rounded-xl border-2 p-4 transition-all
+                            ${myRoomId
+                                ? (flashingRoomId?.critical
+                                    ? 'border-red-500 bg-red-50 animate-critical'
+                                    : flashingRoomId
+                                        ? 'border-indigo-400 bg-indigo-50 animate-new-patient'
+                                        : `border-2 ${myRoomDef?.border || 'border-indigo-300'} bg-white`)
+                                : 'border-dashed border-gray-300 bg-white'
+                            }`}
+                        >
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                    {myRoomId
+                                        ? <Bell className="text-indigo-600 w-5 h-5" />
+                                        : <BellOff className="text-gray-400 w-5 h-5" />
+                                    }
+                                    <span className="font-bold text-gray-700 text-sm whitespace-nowrap">
+                                        🔔 我的診間：
+                                    </span>
+                                    {myRoomId && myRoomDef && (
+                                        <span className={`font-bold text-base ${myRoomDef.text}`}>
+                                            {myRoomDef.name} 監聽中
+                                        </span>
+                                    )}
+                                    {!myRoomId && (
+                                        <span className="text-gray-400 text-sm">未設定（不提醒）</span>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap gap-2 items-center">
+                                    {activeRooms.map(room => (
+                                        <button
+                                            key={room.id}
+                                            onClick={() => handleSetMyRoom(myRoomId === room.id ? null : room.id)}
+                                            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all
+                                                ${myRoomId === room.id
+                                                    ? `${room.btnActive} shadow-md scale-105`
+                                                    : `bg-white text-gray-600 border-gray-200 ${room.btnHover}`
+                                                }`}
+                                        >
+                                            {room.name}
+                                            {myRoomId === room.id && ' ✓'}
+                                        </button>
+                                    ))}
+                                    {myRoomId && (
+                                        <button
+                                            onClick={() => handleSetMyRoom(null)}
+                                            className="px-3 py-2 rounded-lg text-sm border-2 border-gray-200 text-gray-400 hover:bg-gray-50 font-bold"
+                                        >
+                                            <BellOff size={16} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {myRoomId && (
+                                <div className="mt-2 text-xs text-gray-500 flex gap-4">
+                                    <span>🔔 新病人：叮咚提示音</span>
+                                    <span>🚨 OHCA / MT：三連嗶警示音</span>
+                                    <span className="text-gray-400">（音量請用電腦本身調整）</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* DASHBOARD */}
                     <div className="mb-6 overflow-x-auto pb-2">
@@ -683,24 +771,32 @@
 
                             {/* Rooms */}
                             {activeRooms.map(room => {
-                                const suspensionState = getRoomSuspensionState(room.id); // NONE, ACTIVE, EXPIRED
-                                const isSuspended = suspensionState !== 'NONE';
+                                const suspensionState = getRoomSuspensionState(room.id);
                                 const nextForLevel1 = calculateNextRoom(1) === room.id;
                                 const nextForOthers = calculateNextRoom(3) === room.id;
+                                const isMyRoom = myRoomId === room.id;
 
                                 return (
-                                    <div key={room.id} className={`flex flex-col gap-2 rounded-lg ${room.color} bg-opacity-20 p-2 border ${room.border}`}>
+                                    <div
+                                        key={room.id}
+                                        className={`flex flex-col gap-2 rounded-lg ${room.color} bg-opacity-20 p-2 border-2 transition-all
+                                            ${isMyRoom
+                                                ? (flashingRoomId?.id === room.id
+                                                    ? (flashingRoomId.critical ? 'border-red-500' : 'border-indigo-500')
+                                                    : `${room.border} ring-2 ring-offset-1 ring-indigo-300`)
+                                                : room.border
+                                            }`}
+                                    >
                                         <div className={`${room.header} text-white font-bold text-center py-2 rounded shadow-sm text-lg relative whitespace-nowrap overflow-hidden text-ellipsis`}>
                                             {room.name}
+                                            {isMyRoom && !flashingRoomId && (
+                                                <span className="absolute top-0.5 right-1 text-[10px] bg-white bg-opacity-30 px-1 rounded">🔔</span>
+                                            )}
                                             {suspensionState === 'ACTIVE' && (
-                                                <div className="absolute top-0 right-0 left-0 bottom-0 bg-red-600 bg-opacity-90 text-white flex items-center justify-center text-xs font-bold animate-pulse">
-                                                    停診中
-                                                </div>
+                                                <div className="absolute inset-0 bg-red-600 bg-opacity-90 text-white flex items-center justify-center text-xs font-bold animate-pulse">停診中</div>
                                             )}
                                             {suspensionState === 'EXPIRED' && (
-                                                <div className="absolute top-0 right-0 left-0 bottom-0 bg-red-800 text-white flex items-center justify-center text-xs font-bold animate-bounce">
-                                                    ⚠️ 時間到
-                                                </div>
+                                                <div className="absolute inset-0 bg-red-800 text-white flex items-center justify-center text-xs font-bold animate-bounce">⚠️ 時間到</div>
                                             )}
                                         </div>
 
@@ -709,231 +805,211 @@
                                                 onClick={() => toggleSuspension(room.id)}
                                                 disabled={!isAdmin}
                                                 className={`text-[10px] md:text-xs w-full py-1 rounded border shadow-sm transition-all flex items-center justify-center gap-1 font-bold h-full disabled:opacity-50 disabled:cursor-not-allowed
-                                                    ${suspensionState === 'ACTIVE' 
-                                                        ? 'bg-red-50 border-red-300 text-red-700' 
+                                                    ${suspensionState === 'ACTIVE'
+                                                        ? 'bg-red-50 border-red-300 text-red-700'
                                                         : suspensionState === 'EXPIRED'
                                                             ? 'bg-red-100 border-red-500 text-red-800 animate-flash-warning'
                                                             : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
                                                     }`}
-                                                >
-                                                    {suspensionState === 'ACTIVE' ? (
-                                                        <span className="flex flex-col items-center leading-none">
-                                                            <span>恢復</span>
-                                                            <span className="scale-90 font-mono text-red-600 countdown-text text-xs mt-0.5">
-                                                                {getFormatRemainingTime(systemState.suspensions[room.id])}
-                                                            </span>
-                                                        </span>
-                                                    ) : suspensionState === 'EXPIRED' ? (
-                                                        <span className="flex flex-col items-center leading-none">
-                                                            <span className="text-sm">時間到</span>
-                                                            <span className="text-[10px]">點擊恢復</span>
-                                                        </span>
-                                                    ) : (
-                                                        <>
-                                                            <PauseCircle size={14} /> 停診 30m
-                                                        </>
-                                                    )}
-                                                </button>
-                                            </div>
-
-                                            <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded">{stats[room.id]?.level1 || 0}</div>
-                                            <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded">{stats[room.id]?.others || 0}</div>
-                                            <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded text-red-700">{stats[room.id]?.mt || 0}</div>
-                                            <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded text-red-700">{stats[room.id]?.ohca || 0}</div>
-                                            
-                                            <div className="h-8 flex items-center justify-center">
-                                                {nextForLevel1 ? <div className="w-full h-full bg-blue-500 text-white rounded flex items-center justify-center text-xs font-bold animate-pulse shadow">NEXT</div> : <span className="text-gray-300">-</span>}
-                                            </div>
-                                            <div className="h-8 flex items-center justify-center">
-                                                {nextForOthers ? <div className="w-full h-full bg-green-500 text-white rounded flex items-center justify-center text-xs font-bold animate-pulse shadow">NEXT</div> : <span className="text-gray-300">-</span>}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        {/* INPUT AREA */}
-                        <div className={`bg-white rounded-xl shadow-md p-4 md:p-6 border-l-4 border-indigo-500 mb-6 transition-opacity ${!isAdmin ? 'opacity-60 pointer-events-none grayscale' : ''}`}>
-                            <div className="flex justify-between items-center mb-4">
-                                <h2 className="text-lg font-bold flex items-center gap-2 text-indigo-700">
-                                    <Plus className="w-5 h-5" />
-                                    新病人掛號輸入
-                                </h2>
-                                {!isAdmin && <span className="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded font-bold">🔒 僅供觀看</span>}
-                            </div>
-                            
-                            {/* Row 1: Basic Info */}
-                            <div className="flex flex-col lg:flex-row gap-6 items-start mb-6">
-                                <div className="flex-1 w-full lg:w-auto">
-                                    <label className="block text-sm font-bold text-gray-700 mb-2">代碼</label>
-                                    <input 
-                                        type="text" 
-                                        value={inputMrn}
-                                        onChange={(e) => setInputMrn(e.target.value)}
-                                        placeholder={isAdmin ? "輸入代碼..." : "已鎖定"}
-                                        disabled={!isAdmin}
-                                        className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-xl font-mono"
-                                        onKeyDown={(e) => e.key === 'Enter' && handleAddPatientClick()}
-                                    />
-                                </div>
-
-                                <div className="w-full lg:w-auto">
-                                    <label className="block text-sm font-bold text-gray-700 mb-2">檢傷級數</label>
-                                    <div className="flex gap-2 overflow-x-auto pb-1">
-                                        {[1, 2, 3, 4, 5].map(level => (
-                                            <button
-                                                key={level}
-                                                onClick={() => setInputLevel(level)}
-                                                disabled={!isAdmin}
-                                                className={`w-12 h-12 rounded-lg font-bold text-xl border-2 transition-all shadow-sm flex-shrink-0
-                                                    ${parseInt(inputLevel) === level
-                                                        ? (level === 1 ? 'bg-red-600 text-white border-red-600 shadow-md transform scale-105' : 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105')
-                                                        : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
-                                                    }`}
                                             >
-                                                {level}
+                                                {suspensionState === 'ACTIVE' ? (
+                                                    <span className="flex flex-col items-center leading-none">
+                                                        <span>恢復</span>
+                                                        <span className="font-mono text-red-600 countdown-text text-xs mt-0.5">
+                                                            {getFormatRemainingTime(systemState.suspensions[room.id])}
+                                                        </span>
+                                                    </span>
+                                                ) : suspensionState === 'EXPIRED' ? (
+                                                    <span className="flex flex-col items-center leading-none">
+                                                        <span className="text-sm">時間到</span>
+                                                        <span className="text-[10px]">點擊恢復</span>
+                                                    </span>
+                                                ) : (
+                                                    <><PauseCircle size={14} /> 停診 30m</>
+                                                )}
                                             </button>
-                                        ))}
+                                        </div>
+
+                                        <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded">{stats[room.id]?.level1 || 0}</div>
+                                        <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded">{stats[room.id]?.others || 0}</div>
+                                        <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded text-red-700">{stats[room.id]?.mt || 0}</div>
+                                        <div className="h-8 flex items-center justify-center font-mono font-bold text-xl bg-white bg-opacity-50 rounded text-red-700">{stats[room.id]?.ohca || 0}</div>
+
+                                        <div className="h-8 flex items-center justify-center">
+                                            {nextForLevel1
+                                                ? <div className="w-full h-full bg-blue-500 text-white rounded flex items-center justify-center text-xs font-bold animate-pulse shadow">NEXT</div>
+                                                : <span className="text-gray-300">-</span>}
+                                        </div>
+                                        <div className="h-8 flex items-center justify-center">
+                                            {nextForOthers
+                                                ? <div className="w-full h-full bg-green-500 text-white rounded flex items-center justify-center text-xs font-bold animate-pulse shadow">NEXT</div>
+                                                : <span className="text-gray-300">-</span>}
+                                        </div>
                                     </div>
-                                </div>
+                                );
+                            })}
+                        </div>
+                    </div>
 
-                                <div className="flex flex-wrap gap-4 pt-8 w-full lg:w-auto">
-                                    <label className={`flex items-center gap-2 px-4 py-3 rounded-lg cursor-pointer transition-all border-2
-                                        ${isMajorTrauma ? 'bg-red-100 border-red-500 text-red-700 font-bold' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={isMajorTrauma} 
-                                            disabled={!isAdmin}
-                                            onChange={(e) => setIsMajorTrauma(e.target.checked)}
-                                            className="w-5 h-5 accent-red-600"
-                                        />
-                                        <span>Trauma</span>
-                                    </label>
+                    {/* INPUT AREA */}
+                    <div className={`bg-white rounded-xl shadow-md p-4 md:p-6 border-l-4 border-indigo-500 mb-6 transition-opacity ${!isAdmin ? 'opacity-60 pointer-events-none grayscale' : ''}`}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg font-bold flex items-center gap-2 text-indigo-700">
+                                <Plus className="w-5 h-5" /> 新病人掛號輸入
+                            </h2>
+                            {!isAdmin && <span className="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded font-bold">🔒 僅供觀看</span>}
+                        </div>
 
-                                    <label className={`flex items-center gap-2 px-4 py-3 rounded-lg cursor-pointer transition-all border-2
-                                        ${isOhca ? 'bg-black text-white border-black font-bold' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={isOhca} 
+                        <div className="flex flex-col lg:flex-row gap-6 items-start mb-6">
+                            <div className="flex-1 w-full lg:w-auto">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">代碼</label>
+                                <input
+                                    type="text"
+                                    value={inputMrn}
+                                    onChange={(e) => setInputMrn(e.target.value)}
+                                    placeholder={isAdmin ? "輸入代碼..." : "已鎖定"}
+                                    disabled={!isAdmin}
+                                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-xl font-mono"
+                                    onKeyDown={(e) => e.key === 'Enter' && handleAddPatientClick()}
+                                />
+                            </div>
+
+                            <div className="w-full lg:w-auto">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">檢傷級數</label>
+                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                    {[1, 2, 3, 4, 5].map(level => (
+                                        <button
+                                            key={level}
+                                            onClick={() => setInputLevel(level)}
                                             disabled={!isAdmin}
-                                            onChange={(e) => {
-                                                setIsOhca(e.target.checked);
-                                                if (e.target.checked) setInputLevel(1); 
-                                            }}
-                                            className="w-5 h-5 accent-red-600"
-                                        />
-                                        <span>OHCA</span>
-                                    </label>
+                                            className={`w-12 h-12 rounded-lg font-bold text-xl border-2 transition-all shadow-sm flex-shrink-0
+                                                ${parseInt(inputLevel) === level
+                                                    ? (level === 1 ? 'bg-red-600 text-white border-red-600 shadow-md scale-105' : 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105')
+                                                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                                                }`}
+                                        >
+                                            {level}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
 
-                            {/* Row 2: Room Selection & Confirm */}
-                            <div className="flex flex-col lg:flex-row gap-6 items-end">
-                                <div className="flex-1 w-full">
-                                    <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1">
-                                        <Stethoscope size={14} /> 指定診間
-                                    </label>
-                                    <div className="flex flex-wrap gap-2">
-                                        {activeRooms.map(room => {
-                                            const isSelected = parseInt(targetRoom) === room.id;
-                                            const isSuggested = suggestedRoomId === room.id;
-                                            
-                                            return (
-                                                <button
-                                                    key={room.id}
-                                                    onClick={() => setTargetRoom(room.id)}
-                                                    disabled={!isAdmin}
-                                                    className={`px-4 py-3 rounded-lg font-bold text-sm border-2 transition-all shadow-sm flex flex-col items-center justify-center min-w-[70px]
-                                                        ${isSelected
-                                                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105'
-                                                            : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
-                                                        }
-                                                        ${isSuggested && !isSelected ? 'border-indigo-300 bg-indigo-50 text-indigo-900 ring-2 ring-indigo-200 ring-offset-1' : ''}
-                                                    `}
-                                                >
-                                                    <span className="text-base">{room.name}</span>
-                                                    {isSuggested && (
-                                                        <span className={`text-[10px] uppercase tracking-wide mt-0.5 ${isSelected ? 'text-indigo-200' : 'text-indigo-500'}`}>
-                                                            建議
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                                
-                                <div className="w-full lg:w-auto mt-4 lg:mt-0">
-                                    <button
-                                        onClick={handleAddPatientClick}
-                                        disabled={!inputMrn || loading || !isAdmin}
-                                        className="w-full lg:w-auto h-[60px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-8 rounded-xl font-bold shadow-lg transition-transform active:scale-95 text-xl flex items-center justify-center gap-2 whitespace-nowrap"
-                                    >
-                                        {loading ? <RotateCw className="animate-spin" /> : <><CheckCircle /> 確認掛號</>}
-                                    </button>
-                                </div>
+                            <div className="flex flex-wrap gap-4 pt-8 w-full lg:w-auto">
+                                <label className={`flex items-center gap-2 px-4 py-3 rounded-lg cursor-pointer transition-all border-2
+                                    ${isMajorTrauma ? 'bg-red-100 border-red-500 text-red-700 font-bold' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
+                                    <input type="checkbox" checked={isMajorTrauma} disabled={!isAdmin} onChange={(e) => setIsMajorTrauma(e.target.checked)} className="w-5 h-5 accent-red-600" />
+                                    <span>Trauma</span>
+                                </label>
+                                <label className={`flex items-center gap-2 px-4 py-3 rounded-lg cursor-pointer transition-all border-2
+                                    ${isOhca ? 'bg-black text-white border-black font-bold' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
+                                    <input type="checkbox" checked={isOhca} disabled={!isAdmin} onChange={(e) => { setIsOhca(e.target.checked); if (e.target.checked) setInputLevel(1); }} className="w-5 h-5 accent-red-600" />
+                                    <span>OHCA</span>
+                                </label>
                             </div>
                         </div>
 
-                        {/* PATIENT LIST */}
-                        <h3 className="text-xl font-bold text-gray-700 mb-4 pl-2 border-l-4 border-gray-400">目前清單 (List)</h3>
-                        <div className="overflow-x-auto pb-4">
-                            <div style={gridStyle} className="min-w-[600px]">
-                                <div className="pt-2 text-right pr-4 text-gray-500 font-medium text-sm">
-                                    <div>時間 / 項目</div>
+                        <div className="flex flex-col lg:flex-row gap-6 items-end">
+                            <div className="flex-1 w-full">
+                                <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1">
+                                    <Stethoscope size={14} /> 指定診間
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {activeRooms.map(room => {
+                                        const isSelected = parseInt(targetRoom) === room.id;
+                                        const isSuggested = suggestedRoomId === room.id;
+                                        return (
+                                            <button
+                                                key={room.id}
+                                                onClick={() => setTargetRoom(room.id)}
+                                                disabled={!isAdmin}
+                                                className={`px-4 py-3 rounded-lg font-bold text-sm border-2 transition-all shadow-sm flex flex-col items-center justify-center min-w-[70px]
+                                                    ${isSelected
+                                                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
+                                                        : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                                                    }
+                                                    ${isSuggested && !isSelected ? 'border-indigo-300 bg-indigo-50 text-indigo-900 ring-2 ring-indigo-200 ring-offset-1' : ''}
+                                                `}
+                                            >
+                                                <span className="text-base">{room.name}</span>
+                                                {isSuggested && (
+                                                    <span className={`text-[10px] uppercase tracking-wide mt-0.5 ${isSelected ? 'text-indigo-200' : 'text-indigo-500'}`}>建議</span>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
-                                {activeRooms.map(room => {
-                                    const roomPatients = patients.filter(p => p.roomId === room.id);
-                                    return (
-                                        <div key={room.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-[300px]">
-                                            <div className={`${room.header} text-white font-bold text-center py-1 text-sm flex justify-between px-2 items-center`}>
-                                                <span className="flex-1">{room.name}</span>
-                                                <button 
-                                                    onClick={() => handleClearPatients(room.id)} 
-                                                    disabled={!isAdmin}
-                                                    className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors disabled:opacity-0" 
-                                                    title={`清空${room.name}病人`}
-                                                >
-                                                    <Trash2 size={12} />
-                                                </button>
-                                            </div>
-                                            <div className="p-2 flex-1 overflow-y-auto max-h-[500px] space-y-2">
-                                                {roomPatients.length === 0 && <div className="text-center text-gray-300 py-8 text-sm italic">無病人</div>}
-                                                {roomPatients.map(p => (
-                                                    <div key={p.id} className="group relative bg-gray-50 p-2 rounded border border-gray-100 hover:border-indigo-200 transition-all">
-                                                        <div className="flex justify-between items-start">
-                                                            <div className="min-w-0">
-                                                                <div className="font-mono font-bold text-gray-800 text-lg leading-none truncate">{p.mrn}</div>
-                                                                <div className="flex gap-1 mt-1 flex-wrap">
-                                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.level === 1 ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'}`}>L{p.level}</span>
-                                                                    {p.isMajorTrauma && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold">MT</span>}
-                                                                    {p.isOhca && <span className="text-[10px] px-1.5 py-0.5 rounded bg-black text-white font-bold">OHCA</span>}
-                                                                </div>
-                                                            </div>
-                                                            <button 
-                                                                onClick={() => handleDeletePatient(p.id)} 
-                                                                disabled={!isAdmin}
-                                                                className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors disabled:hidden" 
-                                                                title="移除掛號"
-                                                            >
-                                                                <Trash2 size={16} />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                            </div>
+
+                            <div className="w-full lg:w-auto mt-4 lg:mt-0">
+                                <button
+                                    onClick={handleAddPatientClick}
+                                    disabled={!inputMrn || loading || !isAdmin}
+                                    className="w-full lg:w-auto h-[60px] bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-8 rounded-xl font-bold shadow-lg transition-transform active:scale-95 text-xl flex items-center justify-center gap-2 whitespace-nowrap"
+                                >
+                                    {loading ? <RotateCw className="animate-spin" /> : <><CheckCircle /> 確認掛號</>}
+                                </button>
                             </div>
                         </div>
                     </div>
-                );
-            }
 
-            const root = createRoot(document.getElementById('root'));
-            root.render(<App />);
+                    {/* PATIENT LIST */}
+                    <h3 className="text-xl font-bold text-gray-700 mb-4 pl-2 border-l-4 border-gray-400">目前清單 (List)</h3>
+                    <div className="overflow-x-auto pb-4">
+                        <div style={gridStyle} className="min-w-[600px]">
+                            <div className="pt-2 text-right pr-4 text-gray-500 font-medium text-sm">
+                                <div>時間 / 項目</div>
+                            </div>
+                            {activeRooms.map(room => {
+                                const roomPatients = patients.filter(p => p.roomId === room.id);
+                                return (
+                                    <div key={room.id} className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden flex flex-col min-h-[300px]">
+                                        <div className={`${room.header} text-white font-bold text-center py-1 text-sm flex justify-between px-2 items-center`}>
+                                            <span className="flex-1">{room.name}</span>
+                                            <button
+                                                onClick={() => handleClearPatients(room.id)}
+                                                disabled={!isAdmin}
+                                                className="bg-white bg-opacity-20 hover:bg-opacity-40 rounded p-1 text-white transition-colors disabled:opacity-0"
+                                                title={`清空${room.name}病人`}
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                        <div className="p-2 flex-1 overflow-y-auto max-h-[500px] space-y-2">
+                                            {roomPatients.length === 0 && <div className="text-center text-gray-300 py-8 text-sm italic">無病人</div>}
+                                            {roomPatients.map(p => (
+                                                <div key={p.id} className="group relative bg-gray-50 p-2 rounded border border-gray-100 hover:border-indigo-200 transition-all">
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="min-w-0">
+                                                            <div className="font-mono font-bold text-gray-800 text-lg leading-none truncate">{p.mrn}</div>
+                                                            <div className="flex gap-1 mt-1 flex-wrap">
+                                                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.level === 1 ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'}`}>L{p.level}</span>
+                                                                {p.isMajorTrauma && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-bold">MT</span>}
+                                                                {p.isOhca && <span className="text-[10px] px-1.5 py-0.5 rounded bg-black text-white font-bold">OHCA</span>}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => handleDeletePatient(p.id)}
+                                                            disabled={!isAdmin}
+                                                            className="text-gray-400 hover:text-red-600 p-1.5 rounded-full hover:bg-red-50 transition-colors disabled:hidden"
+                                                            title="移除掛號"
+                                                        >
+                                                            <Trash2 size={16} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
